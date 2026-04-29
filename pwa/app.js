@@ -1,18 +1,12 @@
 /**
  * persona-voice PWA — app.js
  * Generic voice interface for any Zo persona.
- * Speech → Zo API → response → ElevenLabs TTS → audio playback.
+ * Speech → zo.space proxy → Zo API → response → TTS proxy → audio playback.
+ * Configure only your zo.space host URL — all credentials stay server-side.
  * Falls back to browser Web Speech API if TTS unavailable.
  */
 
 'use strict';
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-const API_BASE    = 'https://api.zo.computer';
-const ASK_ENDPOINT = `${API_BASE}/zo/ask`;
-
-// TTS endpoint — configurable in settings (defaults to Zo space proxy pattern)
-const DEFAULT_TTS_HOST = '';  // empty = use browser TTS fallback until configured
 
 // Built-in voice presets (ElevenLabs voice IDs)
 const VOICE_PRESETS = {
@@ -27,13 +21,12 @@ const NS = 'pv_';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
-  apiKey:         localStorage.getItem(`${NS}api_key`)         || '',
-  personaId:      localStorage.getItem(`${NS}persona_id`)      || '',
-  assistantName:  localStorage.getItem(`${NS}assistant_name`)  || 'Assistant',
-  voiceName:      localStorage.getItem(`${NS}voice_name`)      || 'Antoni',
-  voiceId:        localStorage.getItem(`${NS}voice_id`)        || VOICE_PRESETS.Antoni,
-  ttsEndpoint:    localStorage.getItem(`${NS}tts_endpoint`)    || '',
-  conversationId: localStorage.getItem(`${NS}conversation_id`) || null,
+  zoHost:         localStorage.getItem(`${NS}zo_host`)          || '',
+  personaId:      localStorage.getItem(`${NS}persona_id`)       || '',
+  assistantName:  localStorage.getItem(`${NS}assistant_name`)   || 'Assistant',
+  voiceName:      localStorage.getItem(`${NS}voice_name`)       || 'Antoni',
+  voiceId:        localStorage.getItem(`${NS}voice_id`)         || VOICE_PRESETS.Antoni,
+  conversationId: localStorage.getItem(`${NS}conversation_id`)  || null,
   messages:       [],
   isRecording:    false,
   isSpeaking:     false,
@@ -41,6 +34,18 @@ const state = {
   settingsOpen:   false,
   speechRec:      null,
 };
+
+// Derive proxy endpoints from the configured host
+function askEndpoint()  { return state.zoHost ? `${state.zoHost}/api/zo-ask` : null; }
+function ttsEndpoint()  { return state.zoHost ? `${state.zoHost}/api/tts`    : null; }
+
+// Normalise host: ensure https:// prefix, strip trailing slash
+function normaliseHost(raw) {
+  let h = raw.trim();
+  if (!h) return '';
+  if (!h.startsWith('http')) h = `https://${h}`;
+  return h.replace(/\/$/, '');
+}
 
 // ─── DOM helpers ──────────────────────────────────────────────────────────────
 const $  = (s) => document.querySelector(s);
@@ -71,22 +76,20 @@ function updateHeader() {
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 function loadSettings() {
-  state.apiKey        = localStorage.getItem(`${NS}api_key`)         || '';
+  state.zoHost        = localStorage.getItem(`${NS}zo_host`)         || '';
   state.personaId     = localStorage.getItem(`${NS}persona_id`)      || '';
   state.assistantName = localStorage.getItem(`${NS}assistant_name`)  || 'Assistant';
   state.voiceName     = localStorage.getItem(`${NS}voice_name`)      || 'Antoni';
   state.voiceId       = localStorage.getItem(`${NS}voice_id`)        || VOICE_PRESETS.Antoni;
-  state.ttsEndpoint   = localStorage.getItem(`${NS}tts_endpoint`)    || '';
 }
 
 function openSettings() {
   const sheet = $('#settings-sheet');
   sheet.classList.add('open');
-  $('#api-key-input').value       = state.apiKey;
-  $('#persona-id-input').value    = state.personaId;
+  $('#zo-host-input').value        = state.zoHost;
+  $('#persona-id-input').value     = state.personaId;
   $('#assistant-name-input').value = state.assistantName;
-  $('#voice-select').value        = state.voiceName;
-  $('#tts-endpoint-input').value  = state.ttsEndpoint;
+  $('#voice-select').value         = state.voiceName;
   state.settingsOpen = true;
 }
 
@@ -96,32 +99,29 @@ function closeSettings() {
 }
 
 async function saveSettings() {
-  const apiKey        = $('#api-key-input').value.trim();
+  const zoHost        = normaliseHost($('#zo-host-input').value);
   const personaId     = $('#persona-id-input').value.trim();
   const assistantName = $('#assistant-name-input').value.trim() || 'Assistant';
   const voiceName     = $('#voice-select').value;
-  const ttsEndpoint   = $('#tts-endpoint-input').value.trim();
 
-  if (!apiKey) {
+  if (!zoHost) {
     const msg = $('#status-msg');
-    msg.textContent = '⚠️  Zo API key is required.';
+    msg.textContent = '⚠️  Zo Space host is required.';
     msg.className = 'status-msg error';
     return;
   }
 
-  state.apiKey        = apiKey;
+  state.zoHost        = zoHost;
   state.personaId     = personaId;
   state.assistantName = assistantName;
   state.voiceName     = voiceName;
   state.voiceId       = VOICE_PRESETS[voiceName] || voiceName;
-  state.ttsEndpoint   = ttsEndpoint;
 
-  localStorage.setItem(`${NS}api_key`,        apiKey);
+  localStorage.setItem(`${NS}zo_host`,        zoHost);
   localStorage.setItem(`${NS}persona_id`,     personaId);
   localStorage.setItem(`${NS}assistant_name`, assistantName);
   localStorage.setItem(`${NS}voice_name`,     voiceName);
   localStorage.setItem(`${NS}voice_id`,       state.voiceId);
-  localStorage.setItem(`${NS}tts_endpoint`,   ttsEndpoint);
 
   updateHeader();
 
@@ -134,7 +134,7 @@ async function saveSettings() {
 // ─── Config banner ────────────────────────────────────────────────────────────
 function showConfigBanner() {
   const banner = $('#config-banner');
-  if (banner) banner.style.display = state.apiKey ? 'none' : '';
+  if (banner) banner.style.display = state.zoHost ? 'none' : '';
 }
 
 // ─── Conversation rendering ───────────────────────────────────────────────────
@@ -205,21 +205,17 @@ function setTyping(visible) {
 
 // ─── TTS ──────────────────────────────────────────────────────────────────────
 async function speakText(text) {
-  if (!text || !state.apiKey || !state.ttsEndpoint) {
-    if (!state.ttsEndpoint) await browserTTS(text);
-    return;
-  }
+  if (!text) return;
+  const endpoint = ttsEndpoint();
+  if (!endpoint) { await browserTTS(text); return; }
 
   state.isSpeaking = true;
   updateMicButton();
 
   try {
-    const resp = await fetch(state.ttsEndpoint, {
+    const resp = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${state.apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, voice_id: state.voiceId }),
     });
 
@@ -280,7 +276,7 @@ function initSpeechRecognition() {
 }
 
 function startRecording() {
-  if (!state.apiKey) { openSettings(); return; }
+  if (!state.zoHost) { openSettings(); return; }
   if (!state.speechRec) state.speechRec = initSpeechRecognition();
   if (!state.speechRec) { toast('Speech recognition not supported in this browser.', 'error'); return; }
   state.isRecording = true;
@@ -315,7 +311,9 @@ function updateMicButton() {
 async function sendMessage() {
   const text = $('#message-input').value.trim();
   if (!text || state.isTyping) return;
-  if (!state.apiKey) { openSettings(); return; }
+  if (!state.zoHost) { openSettings(); return; }
+
+  const endpoint = askEndpoint();
 
   $('#message-input').value = '';
   $('#message-input').style.height = 'auto';
@@ -327,20 +325,26 @@ async function sendMessage() {
     if (state.personaId) payload.persona_id = state.personaId;
     if (state.conversationId) payload.conversation_id = state.conversationId;
 
-    const resp = await fetch(ASK_ENDPOINT, {
+    const resp = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${state.apiKey}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
       body: JSON.stringify(payload),
     });
 
-    if (resp.status === 401) {
+    if (resp.status === 401 || resp.status === 403) {
       setTyping(false);
-      toast('Invalid API key — check settings.', 'error');
-      addMessage('system', 'Authentication failed. Check your Zo API key in Settings.');
+      toast('Proxy auth error — check ZO_ASK_TOKEN in Zo Secrets.', 'error');
+      addMessage('system', 'Authentication failed. Ensure ZO_ASK_TOKEN is set in Zo Settings → Advanced → Secrets.');
+      return;
+    }
+
+    if (resp.status === 503) {
+      setTyping(false);
+      toast('Proxy not configured — check Zo Secrets.', 'error');
+      addMessage('system', 'ZO_ASK_TOKEN not set. Add it in Zo Settings → Advanced → Secrets and redeploy /api/zo-ask.');
       return;
     }
 
@@ -383,11 +387,12 @@ function buildSettingsPanel() {
       </div>
 
       <div class="setting-group">
-        <label class="setting-label">Zo API Key</label>
-        <input type="password" class="setting-input" id="api-key-input"
-          placeholder="zo_sk_…" autocomplete="off" spellcheck="false"/>
+        <label class="setting-label">Zo Space Host</label>
+        <input type="text" class="setting-input" id="zo-host-input"
+          placeholder="yourhandle.zo.space" autocomplete="off" spellcheck="false"/>
         <p class="setting-hint">
-          Get a token from <a href="https://zo.computer/settings" target="_blank">Settings → Advanced → Access Tokens</a>
+          Your zo.space handle. All credentials stay server-side — this is the only field you need.
+          Run <code>deploy-tts-endpoint.ts --deploy-all</code> to set up the proxy routes.
         </p>
       </div>
 
@@ -420,15 +425,6 @@ function buildSettingsPanel() {
         <p class="setting-hint">
           ElevenLabs voice for TTS. Requires <code>ELEVENLABS_API_KEY</code> in
           <a href="/?t=settings&s=advanced" target="_blank">Zo Settings → Advanced → Secrets</a>.
-        </p>
-      </div>
-
-      <div class="setting-group">
-        <label class="setting-label">TTS Endpoint (optional)</label>
-        <input type="text" class="setting-input" id="tts-endpoint-input"
-          placeholder="https://yourhost.zo.space/api/tts" autocomplete="off"/>
-        <p class="setting-hint">
-          Your ElevenLabs proxy URL. Leave blank to use browser speech synthesis.
         </p>
       </div>
 
@@ -492,8 +488,8 @@ function init() {
   showConfigBanner();
   renderMessages();
 
-  if (!state.apiKey) {
-    setTimeout(() => toast('Welcome! Tap ⚙️ to configure your Zo API key.', 'info', 5000), 500);
+  if (!state.zoHost) {
+    setTimeout(() => toast('Welcome! Tap ⚙️ to set your Zo Space host.', 'info', 5000), 500);
   }
 }
 

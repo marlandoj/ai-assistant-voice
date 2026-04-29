@@ -1,19 +1,23 @@
 #!/usr/bin/env bun
 /**
- * Deploy a /api/tts zo.space proxy route.
+ * Deploy persona-voice proxy routes to zo.space.
  *
  * Usage:
- *   bun deploy-tts-endpoint.ts                        # ElevenLabs (default, recommended)
- *   bun deploy-tts-endpoint.ts --backend openai       # OpenAI TTS
- *   bun deploy-tts-endpoint.ts --backend edge         # edge-tts (no API key)
+ *   bun deploy-tts-endpoint.ts                         # TTS only — ElevenLabs (default)
+ *   bun deploy-tts-endpoint.ts --backend openai        # TTS only — OpenAI
+ *   bun deploy-tts-endpoint.ts --backend edge          # TTS only — edge-tts (no API key)
+ *   bun deploy-tts-endpoint.ts --deploy-all            # TTS + /api/zo-ask (recommended)
+ *   bun deploy-tts-endpoint.ts --deploy-all --backend openai
  *   bun deploy-tts-endpoint.ts --host myhandle.zo.space
  *
- * Prerequisites:
- *   - ZO_CLIENT_IDENTITY_TOKEN env var (auto-available on Zo server)
- *   - Backend secret saved in Zo Secrets (Settings > Advanced):
- *       ElevenLabs: ELEVENLABS_API_KEY
- *       OpenAI:     OPENAI_API_KEY
- *       edge-tts:   none (run setup-edge-tts.sh first)
+ * One-time prerequisites:
+ *   1. ZO_CLIENT_IDENTITY_TOKEN available (auto on Zo server)
+ *   2. ZO_ASK_TOKEN in Zo Secrets  — create at Settings > Advanced > Access Tokens,
+ *                                    then add as secret named ZO_ASK_TOKEN
+ *   3. TTS secret in Zo Secrets:
+ *        ElevenLabs: ELEVENLABS_API_KEY
+ *        OpenAI:     OPENAI_API_KEY
+ *        edge-tts:   none (run setup-edge-tts.sh first)
  */
 
 import { readFileSync } from "fs";
@@ -29,8 +33,9 @@ function flagValue(flag: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-const backend = (flagValue("--backend") ?? "elevenlabs").toLowerCase();
-const rawHost = flagValue("--host") ?? "marlandoj.zo.space";
+const deployAll = args.includes("--deploy-all");
+const backend   = (flagValue("--backend") ?? "elevenlabs").toLowerCase();
+const rawHost   = flagValue("--host") ?? "marlandoj.zo.space";
 const ZO_HANDLE = rawHost.replace(".zo.space", "");
 const ZO_SPACE_HOST = `https://${ZO_HANDLE}.zo.space`;
 
@@ -52,54 +57,76 @@ if (!IDENTITY_TOKEN) {
   process.exit(1);
 }
 
-const routeCode = readFileSync(join(__dirname, "../assets", cfg.file), "utf8");
+async function deployRoute(label: string, path: string, code: string): Promise<void> {
+  console.log(`📡  Deploying ${path} [${label}] …`);
 
-console.log(`📡  Deploying /api/tts [${backend}] to ${ZO_SPACE_HOST} …`);
+  const res = await fetch("https://api.zo.computer/zo/ask", {
+    method: "POST",
+    headers: {
+      Authorization: IDENTITY_TOKEN!,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      input: [
+        `Create (or overwrite) a zo.space API route at path \`${path}\` with route_type=api and public=true.`,
+        "Use EXACTLY the following TypeScript code, no changes:",
+        "```typescript",
+        code,
+        "```",
+        "After creating the route call get_space_errors() to confirm no runtime errors.",
+        "Reply with only: OK or ERROR:<reason>",
+      ].join("\n"),
+      model_name: "byok:63a73cf2-224a-4641-8dcb-c3313270d08a",
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Zo API error: ${res.status} ${await res.text()}`);
+  }
+
+  const data = await res.json() as { output: string };
+  const output = (data.output ?? "").trim();
+
+  if (output.startsWith("ERROR")) {
+    throw new Error(`Deploy failed: ${output}`);
+  }
+
+  console.log(`✅  ${path} → ${ZO_SPACE_HOST}${path}`);
+}
+
+// ─── Deploy TTS route ─────────────────────────────────────────────────────────
+const ttsCode = readFileSync(join(__dirname, "../assets", cfg.file), "utf8");
+
 if (cfg.secret) {
-  console.log(`    Requires secret: ${cfg.secret} (Settings > Advanced)`);
+  console.log(`    TTS requires secret: ${cfg.secret} (Settings > Advanced)`);
 }
 
-const res = await fetch("https://api.zo.computer/zo/ask", {
-  method: "POST",
-  headers: {
-    Authorization: IDENTITY_TOKEN,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
-    input: [
-      "Create (or overwrite) a zo.space API route at path `/api/tts` with route_type=api and public=true.",
-      "Use EXACTLY the following TypeScript code, no changes:",
-      "```typescript",
-      routeCode,
-      "```",
-      "After creating the route call get_space_errors() to confirm no runtime errors.",
-      "Reply with only: OK or ERROR:<reason>",
-    ].join("\n"),
-    model_name: "byok:63a73cf2-224a-4641-8dcb-c3313270d08a",
-  }),
-});
-
-if (!res.ok) {
-  console.error(`❌  Zo API error: ${res.status} ${await res.text()}`);
+try {
+  await deployRoute(backend, "/api/tts", ttsCode);
+} catch (err) {
+  console.error("❌ ", err);
   process.exit(1);
 }
 
-const data = await res.json() as { output: string };
-const output = (data.output ?? "").trim();
+// ─── Deploy zo-ask route (--deploy-all) ───────────────────────────────────────
+if (deployAll) {
+  const askCode = readFileSync(join(__dirname, "../assets/zo-ask-route.ts"), "utf8");
+  console.log("    zo-ask requires secret: ZO_ASK_TOKEN (Settings > Advanced > Access Tokens → Secrets)");
 
-if (output.startsWith("ERROR")) {
-  console.error("❌  Deploy failed:", output);
-  process.exit(1);
+  try {
+    await deployRoute("zo-ask", "/api/zo-ask", askCode);
+  } catch (err) {
+    console.error("❌ ", err);
+    process.exit(1);
+  }
 }
 
-console.log(`✅  /api/tts deployed → ${ZO_SPACE_HOST}/api/tts`);
+// ─── Summary ──────────────────────────────────────────────────────────────────
 console.log("");
-console.log("Next steps:");
-if (cfg.secret) {
-  console.log(`  1. Ensure ${cfg.secret} is saved in Zo Secrets (Settings > Advanced)`);
-  console.log(`  2. Set the TTS endpoint in the PWA settings to: ${ZO_SPACE_HOST}/api/tts`);
-} else {
-  console.log(`  1. Run setup-edge-tts.sh once to install the edge-tts Python package`);
-  console.log(`  2. Set the TTS endpoint in the PWA settings to: ${ZO_SPACE_HOST}/api/tts`);
-  console.log(`  3. Voice IDs are edge-tts voice names, e.g. en-US-GuyNeural`);
-}
+console.log("Setup complete. Configure the PWA with:");
+console.log(`  Zo Space Host: ${ZO_SPACE_HOST}`);
+console.log("");
+console.log("Required Zo Secrets (Settings > Advanced):");
+if (cfg.secret) console.log(`  ${cfg.secret}       — TTS API key`);
+if (deployAll)  console.log(`  ZO_ASK_TOKEN         — Zo access token for the AI proxy`);
+if (!cfg.secret) console.log("  (none for edge-tts — run setup-edge-tts.sh once)");

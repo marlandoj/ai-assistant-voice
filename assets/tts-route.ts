@@ -31,13 +31,6 @@ function jsonError(
   });
 }
 
-function extractUserToken(c: Context): string | null {
-  const raw = c.req.header("x-zo-user-token");
-  if (!raw) return null;
-  const token = raw.trim().replace(/^Bearer\s+/i, "").trim();
-  return token.length >= 8 ? token : null;
-}
-
 export default async (c: Context): Promise<Response> => {
   const origin = c.req.header("origin");
   const cors = buildCorsHeaders(origin);
@@ -50,8 +43,9 @@ export default async (c: Context): Promise<Response> => {
     return jsonError({ error: "method_not_allowed" }, 405, cors);
   }
 
-  if (!extractUserToken(c)) {
-    return jsonError({ error: "unauthorized" }, 401, cors);
+  // Gate on Origin — only zo.space / zo.computer domains allowed
+  if (!origin || !ALLOWED_ORIGIN_REGEX.test(origin)) {
+    return jsonError({ error: "forbidden_origin" }, 403, cors);
   }
 
   const elevenKey = process.env.ELEVENLABS_API_KEY;
