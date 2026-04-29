@@ -21,7 +21,38 @@ Generic voice interface PWA — works with any Zo persona, not just Alaric.
 
 1. Set `ELEVENLABS_API_KEY` in [Settings → Advanced → Secrets](/?t=settings&s=advanced)
 2. Get a Zo API token from [Settings → Advanced → Access Tokens](/?t=settings&s=advanced)
-3. Deploy the PWA or open `pwa/index.html` locally
+3. Deploy the TTS proxy endpoint to zo.space (see below)
+4. Deploy the PWA or open `pwa/index.html` locally
+
+## TTS Endpoint (zo.space proxy)
+
+The PWA calls a server-side TTS proxy at `/api/tts` on zo.space — this keeps your
+ElevenLabs API key out of the browser.
+
+**Deploy it:**
+```bash
+bun /home/workspace/Skills/persona-voice/scripts/deploy-tts-endpoint.ts
+```
+
+This creates `https://<your-handle>.zo.space/api/tts` automatically.
+
+For a different zo.space host:
+```bash
+bun deploy-tts-endpoint.ts --host myhandle.zo.space
+```
+
+The source for the route lives at `assets/tts-route.ts` — edit it there before
+re-running the deploy script if you need to customize CORS origins, default voice,
+or model settings.
+
+**Endpoint contract:**
+```
+POST /api/tts
+Headers: Content-Type: application/json
+         X-Zo-User-Token: <your-zo-access-token>
+Body:    { "text": "Hello", "voice_id": "ErXwobaYiN019PkySvjV" }
+Returns: audio/mpeg stream
+```
 
 ## CLI
 
