@@ -34,7 +34,8 @@ Skills/persona-voice/
 └── assets/
     ├── tts-route.ts            # ElevenLabs backend (recommended)
     ├── tts-route-openai.ts     # OpenAI TTS backend
-    └── tts-route-edge.ts       # edge-tts backend (no API key needed)
+    ├── tts-route-edge.ts       # edge-tts backend (no API key needed)
+    └── zo-ask-route.ts         # Zo AI proxy (server-side token, no browser exposure)
 ```
 
 ---
@@ -42,7 +43,7 @@ Skills/persona-voice/
 ## Requirements
 
 - A [Zo Computer](https://zo.computer) account
-- A Zo API access token (created in Settings → Advanced → Access Tokens)
+- A Zo API access token saved as `ZO_ASK_TOKEN` in Zo Secrets (Settings → Advanced)
 - A TTS API key — or use the free `edge-tts` backend (no key required)
 - [Bun](https://bun.sh) runtime (pre-installed on Zo)
 
@@ -115,9 +116,15 @@ If you skip this step entirely, the PWA will use your browser's built-in speech 
 
 ---
 
-### Step 3 — Get a Zo API token
+### Step 3 — Set your Zo API token server-side
 
-**In plain language:** Go to Settings → Advanced → Access Tokens on your Zo Computer and create a new token. Copy it — you'll paste it into the PWA settings.
+The PWA never touches credentials directly — all API calls are proxied through your `zo.space`. You need to store your Zo token as a server-side secret once:
+
+**In plain language:** Go to Settings → Advanced on your Zo Computer:
+1. Under **Access Tokens** — create a new token and copy it
+2. Under **Secrets** — add a secret named `ZO_ASK_TOKEN` with that token as the value
+
+The zo.space server will pick it up automatically on the next restart.
 
 ---
 
@@ -125,11 +132,11 @@ If you skip this step entirely, the PWA will use your browser's built-in speech 
 
 Open `pwa/index.html` in your browser, or serve the `pwa/` directory from any static host.
 
-On first launch, tap the ⚙️ settings icon and fill in:
-- **TTS Endpoint** — `https://<your-handle>.zo.space/api/tts`
-- **Zo API Token** — the token you created in Step 3
-- **Persona ID** — the ID of the Zo persona you want to talk to
-- **Assistant Name** — display name shown in the conversation
+On first launch, tap the ⚙️ settings icon to configure:
+- **Persona** — which AI persona to talk to (e.g. Alaric, Alaric · Fast)
+- **Voice** — which ElevenLabs voice to use (falls back to browser speech if unavailable)
+
+No API keys or tokens are entered in the browser — everything is handled server-side.
 
 ---
 
