@@ -1,16 +1,19 @@
 #!/usr/bin/env bun
 /**
- * Deploy the /api/tts zo.space proxy route.
+ * Deploy a /api/tts zo.space proxy route.
+ *
+ * Usage:
+ *   bun deploy-tts-endpoint.ts                        # ElevenLabs (default, recommended)
+ *   bun deploy-tts-endpoint.ts --backend openai       # OpenAI TTS
+ *   bun deploy-tts-endpoint.ts --backend edge         # edge-tts (no API key)
+ *   bun deploy-tts-endpoint.ts --host myhandle.zo.space
  *
  * Prerequisites:
  *   - ZO_CLIENT_IDENTITY_TOKEN env var (auto-available on Zo server)
- *   - ELEVENLABS_API_KEY saved in Zo Secrets (Settings > Advanced)
- *
- * Usage:
- *   bun deploy-tts-endpoint.ts [--host marlandoj.zo.space]
- *
- * The script reads assets/tts-route.ts, submits it to Zo's space API,
- * and prints the live endpoint URL on success.
+ *   - Backend secret saved in Zo Secrets (Settings > Advanced):
+ *       ElevenLabs: ELEVENLABS_API_KEY
+ *       OpenAI:     OPENAI_API_KEY
+ *       edge-tts:   none (run setup-edge-tts.sh first)
  */
 
 import { readFileSync } from "fs";
@@ -20,9 +23,28 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const args = process.argv.slice(2);
-const hostFlag = args.indexOf("--host");
-const ZO_HANDLE = hostFlag >= 0 ? args[hostFlag + 1].replace(".zo.space", "") : "marlandoj";
+
+function flagValue(flag: string): string | undefined {
+  const i = args.indexOf(flag);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+const backend = (flagValue("--backend") ?? "elevenlabs").toLowerCase();
+const rawHost = flagValue("--host") ?? "marlandoj.zo.space";
+const ZO_HANDLE = rawHost.replace(".zo.space", "");
 const ZO_SPACE_HOST = `https://${ZO_HANDLE}.zo.space`;
+
+const BACKENDS: Record<string, { file: string; secret?: string }> = {
+  elevenlabs: { file: "tts-route.ts",        secret: "ELEVENLABS_API_KEY" },
+  openai:     { file: "tts-route-openai.ts", secret: "OPENAI_API_KEY" },
+  edge:       { file: "tts-route-edge.ts" },
+};
+
+const cfg = BACKENDS[backend];
+if (!cfg) {
+  console.error(`❌  Unknown backend "${backend}". Choose: elevenlabs | openai | edge`);
+  process.exit(1);
+}
 
 const IDENTITY_TOKEN = process.env.ZO_CLIENT_IDENTITY_TOKEN;
 if (!IDENTITY_TOKEN) {
@@ -30,12 +52,12 @@ if (!IDENTITY_TOKEN) {
   process.exit(1);
 }
 
-const routeCode = readFileSync(
-  join(__dirname, "../assets/tts-route.ts"),
-  "utf8",
-);
+const routeCode = readFileSync(join(__dirname, "../assets", cfg.file), "utf8");
 
-console.log("📡  Deploying /api/tts to zo.space …");
+console.log(`📡  Deploying /api/tts [${backend}] to ${ZO_SPACE_HOST} …`);
+if (cfg.secret) {
+  console.log(`    Requires secret: ${cfg.secret} (Settings > Advanced)`);
+}
 
 const res = await fetch("https://api.zo.computer/zo/ask", {
   method: "POST",
@@ -73,6 +95,11 @@ if (output.startsWith("ERROR")) {
 console.log(`✅  /api/tts deployed → ${ZO_SPACE_HOST}/api/tts`);
 console.log("");
 console.log("Next steps:");
-console.log(`  1. Ensure ELEVENLABS_API_KEY is saved in Zo Secrets (Settings > Advanced)`);
-console.log(`  2. Set the TTS endpoint in the PWA settings to: ${ZO_SPACE_HOST}/api/tts`);
-console.log(`  3. The endpoint accepts: POST { text, voice_id } with X-Zo-User-Token header`);
+if (cfg.secret) {
+  console.log(`  1. Ensure ${cfg.secret} is saved in Zo Secrets (Settings > Advanced)`);
+  console.log(`  2. Set the TTS endpoint in the PWA settings to: ${ZO_SPACE_HOST}/api/tts`);
+} else {
+  console.log(`  1. Run setup-edge-tts.sh once to install the edge-tts Python package`);
+  console.log(`  2. Set the TTS endpoint in the PWA settings to: ${ZO_SPACE_HOST}/api/tts`);
+  console.log(`  3. Voice IDs are edge-tts voice names, e.g. en-US-GuyNeural`);
+}

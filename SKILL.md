@@ -26,31 +26,74 @@ Generic voice interface PWA — works with any Zo persona, not just Alaric.
 
 ## TTS Endpoint (zo.space proxy)
 
-The PWA calls a server-side TTS proxy at `/api/tts` on zo.space — this keeps your
-ElevenLabs API key out of the browser.
+The PWA calls a server-side TTS proxy at `/api/tts` on zo.space — this keeps API keys
+out of the browser. Three backend options are included:
 
-**Deploy it:**
+| Backend | Quality | Cost | Secret required |
+|---|---|---|---|
+| ⭐ **ElevenLabs** *(recommended)* | Best — natural, expressive | ~$0.30/1K chars | `ELEVENLABS_API_KEY` |
+| **OpenAI TTS** | Very good — 6 voices | ~$0.015/1K chars | `OPENAI_API_KEY` |
+| **edge-tts** | Good — 300+ Neural voices | Free forever | None |
+
+If no TTS endpoint is configured, the PWA falls back to the **browser's built-in Web Speech API** automatically.
+
+---
+
+### Deploy — ElevenLabs (recommended)
+
 ```bash
+# Save ELEVENLABS_API_KEY in Settings > Advanced first
 bun /home/workspace/Skills/persona-voice/scripts/deploy-tts-endpoint.ts
+# or explicitly:
+bun deploy-tts-endpoint.ts --backend elevenlabs
 ```
 
-This creates `https://<your-handle>.zo.space/api/tts` automatically.
+Default voice: Antoni (`ErXwobaYiN019PkySvjV`). Use `scripts/persona-voice.ts voices` to list alternatives.
 
-For a different zo.space host:
+---
+
+### Deploy — OpenAI TTS
+
 ```bash
-bun deploy-tts-endpoint.ts --host myhandle.zo.space
+# Save OPENAI_API_KEY in Settings > Advanced first
+bun deploy-tts-endpoint.ts --backend openai
 ```
 
-The source for the route lives at `assets/tts-route.ts` — edit it there before
-re-running the deploy script if you need to customize CORS origins, default voice,
-or model settings.
+Voice IDs: `alloy` · `echo` · `fable` · `onyx` *(default)* · `nova` · `shimmer`
 
-**Endpoint contract:**
+---
+
+### Deploy — edge-tts (no API key)
+
+```bash
+# One-time install
+bash /home/workspace/Skills/persona-voice/scripts/setup-edge-tts.sh
+
+# Deploy
+bun deploy-tts-endpoint.ts --backend edge
+```
+
+Voice IDs are edge-tts names, e.g. `en-US-GuyNeural`, `en-US-AriaNeural`.
+Run `edge-tts --list-voices` to see all 300+ options.
+
+---
+
+### Custom host
+
+```bash
+bun deploy-tts-endpoint.ts --backend elevenlabs --host myhandle.zo.space
+```
+
+Route source files live in `assets/` — edit before re-deploying to customize CORS,
+default voice, or model settings.
+
+### Endpoint contract (all backends)
+
 ```
 POST /api/tts
 Headers: Content-Type: application/json
          X-Zo-User-Token: <your-zo-access-token>
-Body:    { "text": "Hello", "voice_id": "ErXwobaYiN019PkySvjV" }
+Body:    { "text": "Hello", "voice_id": "<backend-specific-id>" }
 Returns: audio/mpeg stream
 ```
 
