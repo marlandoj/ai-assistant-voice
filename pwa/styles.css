@@ -160,7 +160,7 @@ html, body {
   margin-top: 2px;
 }
 
-.avatar.alaric {
+.avatar.assistant {
   background: linear-gradient(135deg, var(--violet-600), var(--blue-600));
   color: #fff;
 }
@@ -194,7 +194,7 @@ html, body {
   word-break: break-word;
 }
 
-.alaric .bubble {
+.assistant .bubble {
   background: var(--zinc-800);
   border: 1px solid var(--zinc-700);
   border-bottom-left-radius: 4px;

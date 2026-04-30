@@ -158,11 +158,11 @@ function renderMessages() {
   }
 
   container.innerHTML = state.messages.map((m) => {
-    const role   = m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'alaric';
+    const role   = m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant';
     const avatar =
       role === 'user'   ? `<div class="avatar user-avatar">${m.name ? m.name[0] : 'U'}</div>` :
       role === 'system' ? `<div class="avatar system-avatar">⚡</div>` :
-                          `<div class="avatar alaric">${avatarInitial()}</div>`;
+                          `<div class="avatar assistant">${avatarInitial()}</div>`;
     return `
       <div class="message ${role}">
         ${avatar}
@@ -188,7 +188,7 @@ function setTyping(visible) {
     if (!el) {
       container.insertAdjacentHTML('beforeend', `
         <div class="typing-wrap" id="typing-indicator">
-          <div class="avatar alaric" style="flex-shrink:0">${avatarInitial()}</div>
+          <div class="avatar assistant" style="flex-shrink:0">${avatarInitial()}</div>
           <div class="typing-bubble">
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>

@@ -1,21 +1,24 @@
 ---
-name: persona-voice
+name: ai-assistant-voice
 description: >
-  Generic voice interface PWA that works with any Zo persona. Speech → Zo API → ElevenLabs TTS.
-  Persona-agnostic: configure any persona ID and assistant name at runtime. Includes a CLI for
-  managing voice configs and a full-screen PWA for mobile/desktop voice sessions.
+  Full-screen voice AI PWA for any Zo persona. Speech → Zo API proxy → AI response → TTS.
+  Works with any persona on your Zo Computer — configure the persona ID, assistant name, and
+  voice at runtime. Includes a CLI for managing voice configs and a deploy script for zo.space.
+  Three TTS backends: ElevenLabs (recommended), OpenAI TTS, or edge-tts (free/no key).
+  Falls back to browser Web Speech API automatically.
 compatibility: Created for Zo Computer
 metadata:
   author: marlandoj.zo.computer
-  version: 1.0.0
+  version: 2.0.0
   requires:
-    - ELEVENLABS_API_KEY (set in Settings > Advanced — for TTS)
-    - Zo API Access Token (entered in PWA settings)
+    - ZO_ASK_TOKEN (required — Zo Access Token for AI proxy, Settings > Advanced)
+    - ELEVENLABS_API_KEY (optional — for ElevenLabs TTS backend)
+    - OPENAI_API_KEY (optional — for OpenAI TTS backend)
 ---
 
-# Persona Voice
+# AI Assistant Voice
 
-Generic voice interface PWA — works with any Zo persona, not just Alaric.
+Full-screen voice AI PWA — works with any persona on your Zo Computer.
 
 ## Setup
 
@@ -43,12 +46,12 @@ If no TTS endpoint is configured, the PWA falls back to the **browser's built-in
 
 ```bash
 # Save ELEVENLABS_API_KEY in Settings > Advanced first
-bun /home/workspace/Skills/persona-voice/scripts/deploy-tts-endpoint.ts
+bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts
 # or explicitly:
 bun deploy-tts-endpoint.ts --backend elevenlabs
 ```
 
-Default voice: Antoni (`ErXwobaYiN019PkySvjV`). Use `scripts/persona-voice.ts voices` to list alternatives.
+Default voice: Antoni (`ErXwobaYiN019PkySvjV`). Use `scripts/ai-assistant-voice.ts voices` to list alternatives.
 
 ---
 
@@ -67,7 +70,7 @@ Voice IDs: `alloy` · `echo` · `fable` · `onyx` *(default)* · `nova` · `shim
 
 ```bash
 # One-time install
-bash /home/workspace/Skills/persona-voice/scripts/setup-edge-tts.sh
+bash /home/workspace/Skills/ai-assistant-voice/scripts/setup-edge-tts.sh
 
 # Deploy
 bun deploy-tts-endpoint.ts --backend edge
@@ -100,30 +103,33 @@ Returns: audio/mpeg stream
 ## CLI
 
 ```bash
-cd /home/workspace/Skills/persona-voice/scripts
+cd /home/workspace/Skills/ai-assistant-voice/scripts
 
 # List available ElevenLabs voices
-bun persona-voice.ts voices
+bun ai-assistant-voice.ts voices
 
 # Save a persona voice config
-bun persona-voice.ts config set \
-  --persona fe5d7648-140a-4277-a7d4-7d8d7bf4aee8 \
-  --name "Alaric" \
+bun ai-assistant-voice.ts config set \
+  --persona <your-persona-id> \
+  --name "My Assistant" \
   --voice ErXwobaYiN019PkySvjV
 
 # List saved configs
-bun persona-voice.ts config list
+bun ai-assistant-voice.ts config list
 
 # Speak text
-bun persona-voice.ts speak "Hello, Sir." --voice ErXwobaYiN019PkySvjV
+bun ai-assistant-voice.ts speak "Hello." --voice ErXwobaYiN019PkySvjV
 ```
+
+Find your persona ID at [Settings → AI → Personas](/?t=settings&s=ai&d=personas).
 
 ## PWA
 
-Deploy `pwa/` to any static host or zo.space asset. The PWA:
+Deploy `pwa/` to any static host or zo.space. The PWA:
 - Works as a standalone full-screen mobile app (add to Home Screen)
 - Configures persona ID, assistant name, and voice per user in Settings
-- Falls back to browser Web Speech API if ElevenLabs is unavailable
+- Falls back to browser Web Speech API if TTS is unavailable
+- Deploys to any path — `sw.js` auto-detects its base path
 
 ## Voice Config File
 
@@ -131,7 +137,7 @@ Configs are saved to `~/.zo/voice/persona-voices.json`:
 ```json
 {
   "personas": [
-    { "id": "fe5d7648-...", "name": "Alaric", "voiceId": "ErXwobaYiN019PkySvjV" }
+    { "id": "<your-persona-id>", "name": "My Assistant", "voiceId": "ErXwobaYiN019PkySvjV" }
   ]
 }
 ```

@@ -1,11 +1,13 @@
 // Service Worker — offline shell + cache-bust for app shell
-const CACHE = 'alaric-voice-v1';
+const CACHE = 'ai-assistant-voice-v1';
+
+// Derive base path from the SW registration scope — works at any deployment path
+const BASE = self.registration.scope.replace(/\/$/, '');
 const SHELL = [
-  '/alaric-voice/',
-  '/alaric-voice/index.html',
-  '/alaric-voice/app.js',
-  '/alaric-voice/styles.css',
-  '/images/alaricai-logo.png',
+  BASE + '/',
+  BASE + '/index.html',
+  BASE + '/app.js',
+  BASE + '/styles.css',
 ];
 
 self.addEventListener('install', (e) => {
