@@ -4,14 +4,14 @@ import { useState, useEffect, useRef, useCallback } from "react";
 interface Message { role: "user" | "assistant" | "system"; text: string; time: string; }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const ZO_SPACE          = "{{ZO_HOST}}";
-const TTS_ENDPOINT      = `${ZO_SPACE}/api/tts`;
-const ASK_ENDPOINT      = `${ZO_SPACE}/api/ai-ask`;
-const RT_SESSION        = `${ZO_SPACE}/api/realtime-session`;
-const PERSONAS_ENDPOINT = `${ZO_SPACE}/api/personas`;
-const RT_MODEL          = "gpt-4o-mini-realtime-preview";
+const ZO_SPACE     = "{{ZO_HOST}}";
+const TTS_ENDPOINT = `${ZO_SPACE}/api/tts`;
+const ASK_ENDPOINT = `${ZO_SPACE}/api/ai-ask`;
+const RT_SESSION   = `${ZO_SPACE}/api/realtime-session`;
+const RT_MODEL     = "gpt-4o-mini-realtime-preview";
 
 interface PersonaOption { id: string; name: string; }
+const STATIC_PERSONAS: PersonaOption[] = {{PERSONAS_JSON}};
 
 const ELEVEN_VOICES: Record<string, string> = {
   Antoni: "ErXwobaYiN019PkySvjV",
@@ -163,16 +163,7 @@ function SettingsPanel({
   const [rtV, setRtV]         = useState(rtVoice);
   const [persona, setPersona] = useState(personaId);
   const [elv, setElv]         = useState(elevenVoice);
-  const [personas,        setPersonas]        = useState<PersonaOption[]>([]);
-  const [loadingPersonas, setLoadingPersonas] = useState(true);
-  const [personaError,    setPersonaError]    = useState(false);
-
-  useEffect(() => {
-    fetch(PERSONAS_ENDPOINT)
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then((d: { personas: PersonaOption[] }) => { setPersonas(d.personas); setLoadingPersonas(false); })
-      .catch(() => { setPersonaError(true); setLoadingPersonas(false); });
-  }, []);
+  const personas = STATIC_PERSONAS;
 
   const sel: React.CSSProperties = {
     width: "100%", background: "#27272a", border: "1px solid #3f3f46",
@@ -234,17 +225,11 @@ function SettingsPanel({
           <>
             <div style={{ marginBottom: 20 }}>
               <label style={label}>AI Persona</label>
-              {loadingPersonas ? (
-                <div style={{ color: "#71717a", fontSize: 13, padding: "10px 0" }}>Loading personas…</div>
-              ) : personaError ? (
-                <div style={{ color: "#ef4444", fontSize: 13, padding: "10px 0" }}>Could not load personas. Check your Zo Space Host setting.</div>
-              ) : (
-                <select value={persona} onChange={e => setPersona(e.target.value)} style={sel}>
-                  {personas.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              )}
+              <select value={persona} onChange={e => setPersona(e.target.value)} style={sel}>
+                {personas.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
             </div>
             <div style={{ marginBottom: 20 }}>
               <label style={label}>ElevenLabs Voice</label>

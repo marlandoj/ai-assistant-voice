@@ -30,7 +30,8 @@
  *   4. OPENAI_API_KEY — only if you want the GPT Realtime mode
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -150,22 +151,84 @@ if (deployAll) {
     console.error("⚠️   /api/realtime-session failed (non-fatal — Realtime mode won't work):", err);
   }
 
-  // /api/personas
-  const personasCode = readFileSync(join(ASSETS, "personas-route.ts"), "utf8");
-  console.log("    ℹ️   /api/personas requires: ZO_ASK_TOKEN (same token used by /api/ai-ask)");
+  // ── Fetch personas at deploy time (bake into page as static JSON) ──────────
+  console.log("📋  Fetching personas list at deploy time…");
+  let personasJson = "[]";
   try {
-    await deployRoute("personas", "/api/personas", personasCode);
+    const pRes = await fetch("https://api.zo.computer/zo/ask", {
+      method: "POST",
+      headers: { Authorization: IDENTITY_TOKEN!, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        input: "List all personas. Return ONLY a JSON array of objects with id and name fields, no markdown, no explanation. Example: [{\"id\":\"uuid\",\"name\":\"Persona Name\"}]",
+        model_name: "byok:63a73cf2-224a-4641-8dcb-c3313270d08a",
+        output_format: {
+          type: "object",
+          properties: {
+            personas: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { id: { type: "string" }, name: { type: "string" } },
+                required: ["id", "name"],
+              },
+            },
+          },
+          required: ["personas"],
+        },
+      }),
+    });
+    if (pRes.ok) {
+      const pData = await pRes.json() as { output: { personas: { id: string; name: string }[] } };
+      const list = pData.output?.personas ?? [];
+      if (list.length > 0) {
+        personasJson = JSON.stringify(list);
+        console.log(`✅  Fetched ${list.length} personas — baked into page`);
+      } else {
+        console.warn("⚠️   Personas list was empty — persona dropdown will have no options");
+      }
+    } else {
+      console.warn(`⚠️   Could not fetch personas (${pRes.status}) — dropdown will be empty`);
+    }
   } catch (err) {
-    console.error("⚠️   /api/personas failed (non-fatal — persona dropdown will be empty):", err);
+    console.warn("⚠️   Personas fetch failed (non-fatal):", err);
+  }
+
+  // ── Portrait: upload as zo.space asset ───────────────────────────────────
+  console.log("🖼️   Uploading portrait asset…");
+  const PORTRAIT_GITHUB = "https://raw.githubusercontent.com/marlandoj/ai-assistant-voice/main/assets/ai-assistant-default.png";
+  let PORTRAIT_URL = PORTRAIT_GITHUB;
+  try {
+    const imgRes = await fetch(PORTRAIT_GITHUB);
+    if (imgRes.ok) {
+      const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+      const tmpPath = join(tmpdir(), "ai-assistant-portrait.png");
+      writeFileSync(tmpPath, imgBuf);
+
+      // Upload via Zo API
+      const uploadInstruction = `Upload the file at path "${tmpPath}" as a zo.space asset at asset_path "/images/ai-assistant-portrait.png" using the update_space_asset tool. Reply: OK or ERROR:<reason>`;
+      const uRes = await fetch("https://api.zo.computer/zo/ask", {
+        method: "POST",
+        headers: { Authorization: IDENTITY_TOKEN!, "Content-Type": "application/json" },
+        body: JSON.stringify({ input: uploadInstruction, model_name: "byok:63a73cf2-224a-4641-8dcb-c3313270d08a" }),
+      });
+      if (uRes.ok) {
+        const uData = await uRes.json() as { output: string };
+        if (!(uData.output ?? "").startsWith("ERROR")) {
+          PORTRAIT_URL = "/images/ai-assistant-portrait.png";
+          console.log("✅  Portrait uploaded as zo.space asset");
+        } else {
+          console.warn("⚠️   Asset upload returned error — falling back to GitHub URL");
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("⚠️   Portrait upload failed (non-fatal — using GitHub URL):", err);
   }
 
   // Build assistant slug (lowercase, no spaces)
   const assistSlug = assistName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
-  // Portrait: use GitHub raw URL so no asset upload is needed
-  const PORTRAIT_URL = "https://raw.githubusercontent.com/marlandoj/ai-assistant-voice/main/assets/ai-assistant-default.png";
-
-  // /page route — substitute placeholders
+  // /page route — substitute placeholders (personas baked in, portrait resolved)
   let pwaCode = readFileSync(join(ASSETS, "pwa-page.tsx"), "utf8");
   pwaCode = pwaCode
     .replace(/\{\{ZO_HOST\}\}/g,            ZO_SPACE_HOST)
@@ -173,7 +236,8 @@ if (deployAll) {
     .replace(/\{\{ASSISTANT_SLUG\}\}/g,     assistSlug)
     .replace(/\{\{PAGE_PATH\}\}/g,          pagePath)
     .replace(/\{\{DEFAULT_PERSONA_ID\}\}/g, personaId)
-    .replace(/\{\{PORTRAIT_PATH\}\}/g,      PORTRAIT_URL);
+    .replace(/\{\{PORTRAIT_PATH\}\}/g,      PORTRAIT_URL)
+    .replace(/\{\{PERSONAS_JSON\}\}/g,      personasJson);
 
   try {
     await deployRoute("pwa-page", pagePath, pwaCode, "page");
