@@ -3,102 +3,97 @@ name: ai-assistant-voice
 description: >
   Full-screen voice AI PWA for any Zo persona. Speech → Zo API proxy → AI response → TTS.
   Works with any persona on your Zo Computer — configure the persona ID, assistant name, and
-  voice at runtime. Includes a CLI for managing voice configs and a deploy script for zo.space.
+  voice at runtime. Includes a one-command full installer for zo.space (PWA page + all API routes).
   Three TTS backends: ElevenLabs (recommended), OpenAI TTS, or edge-tts (free/no key).
-  Falls back to browser Web Speech API automatically.
+  Falls back to browser Web Speech API automatically. GPT Realtime hybrid mode supported.
 compatibility: Created for Zo Computer
 metadata:
   author: marlandoj.zo.computer
-  version: 2.0.0
+  version: 2.1.0
   requires:
     - ZO_ASK_TOKEN (required — Zo Access Token for AI proxy, Settings > Advanced)
     - ELEVENLABS_API_KEY (optional — for ElevenLabs TTS backend)
-    - OPENAI_API_KEY (optional — for OpenAI TTS backend)
+    - OPENAI_API_KEY (optional — for OpenAI TTS backend + Realtime mode)
 ---
 
 # AI Assistant Voice
 
 Full-screen voice AI PWA — works with any persona on your Zo Computer.
 
-## Setup
+## Quick Install (recommended)
 
-1. Set `ELEVENLABS_API_KEY` in [Settings → Advanced → Secrets](/?t=settings&s=advanced)
-2. Get a Zo API token from [Settings → Advanced → Access Tokens](/?t=settings&s=advanced)
-3. Deploy the TTS proxy endpoint to zo.space (see below)
-4. Deploy the PWA or open `pwa/index.html` locally
+One command deploys everything: the PWA page + all four API routes.
 
-## TTS Endpoint (zo.space proxy)
+```bash
+# 1. Save ZO_ASK_TOKEN + ELEVENLABS_API_KEY in Settings > Advanced first
+# 2. Run:
+bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts \
+  --deploy-all \
+  --name "My Assistant" \
+  --path "/ai-assistant-voice" \
+  --persona-id "your-persona-uuid"
+```
 
-The PWA calls a server-side TTS proxy at `/api/tts` on zo.space — this keeps API keys
-out of the browser. Three backend options are included:
+This deploys:
+- `/ai-assistant-voice` — the voice PWA page (private, owner sign-in required)
+- `/api/tts` — TTS proxy (keeps ElevenLabs key server-side)
+- `/api/ai-ask` — Zo ask proxy (keeps ZO_ASK_TOKEN server-side)
+- `/api/realtime-session` — OpenAI Realtime session token endpoint
 
-| Backend | Quality | Cost | Secret required |
+After deploying, open `https://yourhandle.zo.space/ai-assistant-voice`.
+
+### Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--name "Aria"` | `My Assistant` | Assistant display name shown in UI |
+| `--path "/aria"` | `/ai-assistant-voice` | URL path for the PWA page |
+| `--persona-id <uuid>` | *(none)* | Pre-populate the persona selector |
+| `--backend openai` | `elevenlabs` | TTS backend (elevenlabs/openai/edge) |
+| `--host myhandle.zo.space` | Auto-detected | Override Zo Space hostname |
+
+Find your persona ID at [Settings → AI → Personas](/?t=settings&s=ai&d=personas).
+
+---
+
+## Required Secrets
+
+Add these in [Settings → Advanced → Secrets](/?t=settings&s=advanced):
+
+| Secret | Required | Purpose |
+|---|---|---|
+| `ZO_ASK_TOKEN` | ✅ Yes | Zo access token — create at Settings > Advanced > Access Tokens, then add as a Secret |
+| `ELEVENLABS_API_KEY` | If using ElevenLabs TTS | From elevenlabs.io → Profile → API Keys |
+| `OPENAI_API_KEY` | If using OpenAI TTS or Realtime mode | From platform.openai.com |
+
+---
+
+## TTS Backends
+
+| Backend | Quality | Cost | Secret |
 |---|---|---|---|
-| ⭐ **ElevenLabs** *(recommended)* | Best — natural, expressive | ~$0.30/1K chars | `ELEVENLABS_API_KEY` |
+| ⭐ **ElevenLabs** *(default)* | Best — natural, expressive | ~$0.30/1K chars | `ELEVENLABS_API_KEY` |
 | **OpenAI TTS** | Very good — 6 voices | ~$0.015/1K chars | `OPENAI_API_KEY` |
 | **edge-tts** | Good — 300+ Neural voices | Free forever | None |
 
-If no TTS endpoint is configured, the PWA falls back to the **browser's built-in Web Speech API** automatically.
-
----
-
-### Deploy — ElevenLabs (recommended)
+### edge-tts (no API key)
 
 ```bash
-# Save ELEVENLABS_API_KEY in Settings > Advanced first
-bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts
-# or explicitly:
-bun deploy-tts-endpoint.ts --backend elevenlabs
-```
-
-Default voice: Antoni (`ErXwobaYiN019PkySvjV`). Use `scripts/ai-assistant-voice.ts voices` to list alternatives.
-
----
-
-### Deploy — OpenAI TTS
-
-```bash
-# Save OPENAI_API_KEY in Settings > Advanced first
-bun deploy-tts-endpoint.ts --backend openai
-```
-
-Voice IDs: `alloy` · `echo` · `fable` · `onyx` *(default)* · `nova` · `shimmer`
-
----
-
-### Deploy — edge-tts (no API key)
-
-```bash
-# One-time install
 bash /home/workspace/Skills/ai-assistant-voice/scripts/setup-edge-tts.sh
-
-# Deploy
-bun deploy-tts-endpoint.ts --backend edge
+bun deploy-tts-endpoint.ts --deploy-all --backend edge
 ```
-
-Voice IDs are edge-tts names, e.g. `en-US-GuyNeural`, `en-US-AriaNeural`.
-Run `edge-tts --list-voices` to see all 300+ options.
 
 ---
 
-### Custom host
+## TTS-Only Deploy
+
+If you only need the TTS proxy (not the full PWA):
 
 ```bash
-bun deploy-tts-endpoint.ts --backend elevenlabs --host myhandle.zo.space
+bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts
 ```
 
-Route source files live in `assets/` — edit before re-deploying to customize CORS,
-default voice, or model settings.
-
-### Endpoint contract (all backends)
-
-```
-POST /api/tts
-Headers: Content-Type: application/json
-         X-Zo-User-Token: <your-zo-access-token>
-Body:    { "text": "Hello", "voice_id": "<backend-specific-id>" }
-Returns: audio/mpeg stream
-```
+---
 
 ## CLI
 
@@ -121,15 +116,17 @@ bun ai-assistant-voice.ts config list
 bun ai-assistant-voice.ts speak "Hello." --voice ErXwobaYiN019PkySvjV
 ```
 
-Find your persona ID at [Settings → AI → Personas](/?t=settings&s=ai&d=personas).
+---
 
-## PWA
+## PWA Features
 
-Deploy `pwa/` to any static host or zo.space. The PWA:
-- Works as a standalone full-screen mobile app (add to Home Screen)
-- Configures persona ID, assistant name, and voice per user in Settings
+- Full-screen mobile-friendly UI with push-to-talk and hands-free modes
+- Wake word activation ("Hey [name]") when tab is active
+- Classic mode: Speech → Zo proxy → AI response → TTS (full context + memory)
+- Realtime mode: GPT-4o-mini-realtime-preview via WebRTC for ~300ms latency
+- Persona selector — switch between any of your Zo personas mid-session
+- New session button — clear conversation history
 - Falls back to browser Web Speech API if TTS is unavailable
-- Deploys to any path — `sw.js` auto-detects its base path
 
 ## Voice Config File
 
