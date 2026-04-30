@@ -189,6 +189,22 @@ Voice configs are stored at `~/.zo/voice/persona-voices.json`.
 
 ---
 
+## Customizing the assistant image
+
+The default avatar is a holographic AI face included in `assets/ai-assistant-default.png`. To use your own image:
+
+**Just ask Zo:** *"Change the AI assistant avatar to [describe what you want]"* — Zo will generate a new image and upload it for you.
+
+**Or manually:** Replace the asset at `/images/ai-assistant-default.png` on your zo.space:
+```bash
+# Upload a new image from your workspace
+# Use the zo.space asset upload in Settings, or ask Zo to do it
+```
+
+The image is displayed as a circle (260×260px) with an animated glow effect when speaking.
+
+---
+
 ## Customizing the TTS route
 
 The route source files are in `assets/`. Edit the one you're using, then re-run the deploy script:
