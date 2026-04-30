@@ -132,11 +132,11 @@ try {
 
 // ─── Deploy remaining routes (--deploy-all) ───────────────────────────────────
 if (deployAll) {
-  // /api/ai-ask
+  // /api/alaric-ask
   const askCode = readFileSync(join(ASSETS, "ai-ask-route.ts"), "utf8");
   console.log("    ℹ️   Requires secret: ZO_ASK_TOKEN (Settings > Advanced > Access Tokens → Secrets)");
   try {
-    await deployRoute("ai-ask", "/api/ai-ask", askCode);
+    await deployRoute("alaric-ask", "/api/alaric-ask", askCode);
   } catch (err) {
     console.error("❌ ", err);
     process.exit(1);
@@ -253,7 +253,7 @@ console.log("✅  AI Assistant Voice installation complete!\n");
 console.log(`Zo Space Host : ${ZO_SPACE_HOST}`);
 if (deployAll) {
   console.log(`PWA Page      : ${ZO_SPACE_HOST}${pagePath}  (private — sign in to view)`);
-  console.log(`AI Proxy      : ${ZO_SPACE_HOST}/api/ai-ask`);
+  console.log(`AI Proxy      : ${ZO_SPACE_HOST}/api/alaric-ask`);
   console.log(`TTS Proxy     : ${ZO_SPACE_HOST}/api/tts`);
   console.log(`RT Sessions   : ${ZO_SPACE_HOST}/api/realtime-session`);
 }

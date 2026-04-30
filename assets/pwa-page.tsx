@@ -6,7 +6,7 @@ interface Message { role: "user" | "assistant" | "system"; text: string; time: s
 // ── Constants ─────────────────────────────────────────────────────────────────
 const ZO_SPACE     = "{{ZO_HOST}}";
 const TTS_ENDPOINT = `${ZO_SPACE}/api/tts`;
-const ASK_ENDPOINT = `${ZO_SPACE}/api/ai-ask`;
+const ASK_ENDPOINT = `${ZO_SPACE}/api/alaric-ask`;
 const RT_SESSION   = `${ZO_SPACE}/api/realtime-session`;
 const RT_MODEL     = "gpt-4o-mini-realtime-preview";
 
