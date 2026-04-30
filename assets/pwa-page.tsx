@@ -4,11 +4,14 @@ import { useState, useEffect, useRef, useCallback } from "react";
 interface Message { role: "user" | "assistant" | "system"; text: string; time: string; }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const ZO_SPACE      = "{{ZO_HOST}}";
-const TTS_ENDPOINT  = `${ZO_SPACE}/api/tts`;
-const ASK_ENDPOINT  = `${ZO_SPACE}/api/ai-ask`;
-const RT_SESSION    = `${ZO_SPACE}/api/realtime-session`;
-const RT_MODEL      = "gpt-4o-mini-realtime-preview";
+const ZO_SPACE          = "{{ZO_HOST}}";
+const TTS_ENDPOINT      = `${ZO_SPACE}/api/tts`;
+const ASK_ENDPOINT      = `${ZO_SPACE}/api/ai-ask`;
+const RT_SESSION        = `${ZO_SPACE}/api/realtime-session`;
+const PERSONAS_ENDPOINT = `${ZO_SPACE}/api/personas`;
+const RT_MODEL          = "gpt-4o-mini-realtime-preview";
+
+interface PersonaOption { id: string; name: string; }
 
 const ELEVEN_VOICES: Record<string, string> = {
   Antoni: "ErXwobaYiN019PkySvjV",
@@ -18,9 +21,6 @@ const ELEVEN_VOICES: Record<string, string> = {
 };
 
 const RT_VOICES = ["echo", "shimmer", "alloy", "ash", "coral", "sage", "verse"];
-
-// PERSONA_OPTIONS injected at deploy time
-const PERSONA_OPTIONS: { label: string; value: string; note?: string }[] = {{PERSONA_OPTIONS}};
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 function MicIcon({ size = 20 }: { size?: number }) {
@@ -163,6 +163,16 @@ function SettingsPanel({
   const [rtV, setRtV]         = useState(rtVoice);
   const [persona, setPersona] = useState(personaId);
   const [elv, setElv]         = useState(elevenVoice);
+  const [personas,        setPersonas]        = useState<PersonaOption[]>([]);
+  const [loadingPersonas, setLoadingPersonas] = useState(true);
+  const [personaError,    setPersonaError]    = useState(false);
+
+  useEffect(() => {
+    fetch(PERSONAS_ENDPOINT)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then((d: { personas: PersonaOption[] }) => { setPersonas(d.personas); setLoadingPersonas(false); })
+      .catch(() => { setPersonaError(true); setLoadingPersonas(false); });
+  }, []);
 
   const sel: React.CSSProperties = {
     width: "100%", background: "#27272a", border: "1px solid #3f3f46",
@@ -224,11 +234,17 @@ function SettingsPanel({
           <>
             <div style={{ marginBottom: 20 }}>
               <label style={label}>AI Persona</label>
-              <select value={persona} onChange={e => setPersona(e.target.value)} style={sel}>
-                {PERSONA_OPTIONS.map(p => (
-                  <option key={p.value} value={p.value}>{p.label}{p.note ? ` (${p.note})` : ""}</option>
-                ))}
-              </select>
+              {loadingPersonas ? (
+                <div style={{ color: "#71717a", fontSize: 13, padding: "10px 0" }}>Loading personas…</div>
+              ) : personaError ? (
+                <div style={{ color: "#ef4444", fontSize: 13, padding: "10px 0" }}>Could not load personas. Check your Zo Space Host setting.</div>
+              ) : (
+                <select value={persona} onChange={e => setPersona(e.target.value)} style={sel}>
+                  {personas.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div style={{ marginBottom: 20 }}>
               <label style={label}>ElevenLabs Voice</label>
@@ -263,7 +279,7 @@ export default function AIAssistantVoicePWA() {
   // Persisted prefs
   const [realtimeMode, setRealtimeMode] = useState(() => localStorage.getItem("asst_rt_mode") !== "false");
   const [rtVoice,      setRtVoice]      = useState(() => localStorage.getItem("asst_rt_voice") || "echo");
-  const [personaId,    setPersonaId]    = useState(() => localStorage.getItem("asst_persona_id") || PERSONA_OPTIONS[0].value);
+  const [personaId,    setPersonaId]    = useState(() => localStorage.getItem("asst_persona_id") || "{{DEFAULT_PERSONA_ID}}");
   const [elevenVoice,  setElevenVoice]  = useState(() => localStorage.getItem("asst_voice_name") || "Antoni");
   const [convId,       setConvId]       = useState(() => localStorage.getItem("asst_conversation_id") || "");
 
