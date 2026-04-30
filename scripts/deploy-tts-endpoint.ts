@@ -150,23 +150,30 @@ if (deployAll) {
     console.error("⚠️   /api/realtime-session failed (non-fatal — Realtime mode won't work):", err);
   }
 
-  // Build persona options JSON
-  const personaOptions = personaId
-    ? `[{ "label": "${assistName}", "value": "${personaId}" }]`
-    : `[]`;
+  // /api/personas
+  const personasCode = readFileSync(join(ASSETS, "personas-route.ts"), "utf8");
+  console.log("    ℹ️   /api/personas requires: ZO_ASK_TOKEN (same token used by /api/ai-ask)");
+  try {
+    await deployRoute("personas", "/api/personas", personasCode);
+  } catch (err) {
+    console.error("⚠️   /api/personas failed (non-fatal — persona dropdown will be empty):", err);
+  }
 
   // Build assistant slug (lowercase, no spaces)
   const assistSlug = assistName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
+  // Portrait: use GitHub raw URL so no asset upload is needed
+  const PORTRAIT_URL = "https://raw.githubusercontent.com/marlandoj/ai-assistant-voice/main/assets/ai-assistant-default.png";
+
   // /page route — substitute placeholders
   let pwaCode = readFileSync(join(ASSETS, "pwa-page.tsx"), "utf8");
   pwaCode = pwaCode
-    .replace(/\{\{ZO_HOST\}\}/g,         ZO_SPACE_HOST)
-    .replace(/\{\{ASSISTANT_NAME\}\}/g,  assistName)
-    .replace(/\{\{ASSISTANT_SLUG\}\}/g,  assistSlug)
-    .replace(/\{\{PERSONA_OPTIONS\}\}/g, personaOptions)
-    .replace(/\{\{PAGE_PATH\}\}/g,       pagePath)
-    .replace(/\{\{PORTRAIT_PATH\}\}/g,   "/images/assistant-portrait.png");
+    .replace(/\{\{ZO_HOST\}\}/g,            ZO_SPACE_HOST)
+    .replace(/\{\{ASSISTANT_NAME\}\}/g,     assistName)
+    .replace(/\{\{ASSISTANT_SLUG\}\}/g,     assistSlug)
+    .replace(/\{\{PAGE_PATH\}\}/g,          pagePath)
+    .replace(/\{\{DEFAULT_PERSONA_ID\}\}/g, personaId)
+    .replace(/\{\{PORTRAIT_PATH\}\}/g,      PORTRAIT_URL);
 
   try {
     await deployRoute("pwa-page", pagePath, pwaCode, "page");
