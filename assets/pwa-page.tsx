@@ -411,6 +411,7 @@ export default function AlaricVoicePWA() {
   const speechRec = useRef<any>(null);
   const wakeRec = useRef<any>(null);
   const wakeTimer = useRef<any>(null);
+  const wakeWasArmed = useRef<boolean>(false);
   const pressTimer = useRef<any>(null);
   const pressStart = useRef<number>(0);
   const pttRaf = useRef<number | null>(null);
@@ -418,6 +419,9 @@ export default function AlaricVoicePWA() {
   const dcRef = useRef<RTCDataChannel|null>(null);
   const audioRef = useRef<HTMLAudioElement|null>(null);
   const localStream = useRef<MediaStream|null>(null);
+  const wakeGatedMuted = useRef<boolean>(false); // true while track is muted *by wake gate* (vs user mute)
+  const rtRemuteTimer = useRef<any>(null);       // timer that re-mutes track after assistant reply
+  const wakeFireCooldown = useRef<number>(0);    // suppress repeat wake fires from interimResults
   const sendZoRef = useRef<((text:string)=>Promise<void>)|null>(null);
   const sessionStart = useRef<number>(Date.now());
 
@@ -570,6 +574,14 @@ export default function AlaricVoicePWA() {
         } else if(evt.item?.role==="assistant"&&evt.item?.content?.length>0){
           const text=evt.item.content.map((c:any)=>c.transcript||c.text||"").filter(Boolean).join(" ");
           if(text) setMessages(m=>[...m,{role:"assistant",text,time:ts()}]);
+          // Wake-gate: after assistant finishes replying, re-mute mic so wake word must fire again.
+          if(wakeGatedMuted.current && localStream.current){
+            if(rtRemuteTimer.current) clearTimeout(rtRemuteTimer.current);
+            rtRemuteTimer.current = setTimeout(()=>{
+              const tr=localStream.current?.getAudioTracks()[0];
+              if(tr){ tr.enabled=false; setRtMuted(true); }
+            }, 1500);
+          }
         }
         break;
       case"error": showToast(`Realtime error: ${evt.error?.message||"unknown"}`,"error",setToast_); break;
@@ -635,6 +647,8 @@ export default function AlaricVoicePWA() {
   },[personaId,rtConnected,rtConnecting,handleRtEvent]);
 
   function disconnectRealtime(){
+    if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
+    wakeGatedMuted.current=false;
     if(dcRef.current){try{dcRef.current.close();}catch{}dcRef.current=null;}
     if(pcRef.current){try{pcRef.current.close();}catch{}pcRef.current=null;}
     if(localStream.current){localStream.current.getTracks().forEach(tr=>tr.stop());localStream.current=null;}
@@ -646,6 +660,9 @@ export default function AlaricVoicePWA() {
     if(!localStream.current) return;
     const track=localStream.current.getAudioTracks()[0]; if(!track) return;
     track.enabled=rtMuted; setRtMuted(v=>!v);
+    // User mute overrides the wake gate.
+    wakeGatedMuted.current=false;
+    if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
     showToast(rtMuted?"Microphone unmuted":"Microphone muted","info",setToast_);
   },[rtMuted]);
 
@@ -734,9 +751,26 @@ export default function AlaricVoicePWA() {
       for(let i=e.resultIndex;i<e.results.length;i++){
         const tx=e.results[i][0].transcript.toLowerCase().trim();
         if(WAKE_PHRASES.some(p=>tx.includes(p))){
+          const now=Date.now();
+          if(now - wakeFireCooldown.current < 2000) break; // suppress interim-result repeats
+          wakeFireCooldown.current = now;
           const cmd=WAKE_PHRASES.reduce((s,p)=>s.replace(new RegExp(p,"gi"),""),tx).trim();
-          if(cmd.length>2){if(realtimeMode&&rtConnected)sendRealtimeText(cmd);else sendMessage(cmd);}
-          else{showToast("Listening…","info",setToast_,1500);if(!realtimeMode)startRecording();}
+          if(realtimeMode&&rtConnected){
+            // Wake gates realtime: unmute mic so the next utterance reaches OpenAI.
+            const tr=localStream.current?.getAudioTracks()[0];
+            if(tr){ tr.enabled=true; setRtMuted(false); wakeGatedMuted.current=true; }
+            if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
+            if(cmd.length>2) sendRealtimeText(cmd);
+            else showToast("Listening…","info",setToast_,1500);
+            // Safety re-mute if assistant never replies within 12s.
+            rtRemuteTimer.current = setTimeout(()=>{
+              const t2=localStream.current?.getAudioTracks()[0];
+              if(t2){ t2.enabled=false; setRtMuted(true); }
+            }, 12000);
+          } else {
+            if(cmd.length>2) sendMessage(cmd);
+            else { showToast("Listening…","info",setToast_,1500); startRecording(); }
+          }
           break;
         }
       }
@@ -749,8 +783,23 @@ export default function AlaricVoicePWA() {
   },[realtimeMode,rtConnected,sendRealtimeText,sendMessage,startRecording,stopWake]); // eslint-disable-line
 
   const toggleWake=useCallback(()=>{
-    if(wakeActive){stopWake();showToast("Wake word disarmed.","info",setToast_);}else startWake();
+    if(wakeActive){wakeWasArmed.current=false;stopWake();showToast("Wake word disarmed.","info",setToast_);}
+    else{wakeWasArmed.current=true;startWake();}
   },[wakeActive,startWake,stopWake]);
+
+  // Wake-gates-realtime: when both are active, the WebRTC mic stays muted until the
+  // wake word fires. The wake handler unmutes; assistant-reply or timeout re-mutes.
+  useEffect(()=>{
+    if(!localStream.current) return;
+    const tr=localStream.current.getAudioTracks()[0]; if(!tr) return;
+    if(rtConnected && wakeActive){
+      tr.enabled=false; setRtMuted(true); wakeGatedMuted.current=true;
+      showToast('Wake-gated — say "Hey {{ASSISTANT_NAME}}" to talk',"info",setToast_,2500);
+    } else if(rtConnected && !wakeActive && wakeGatedMuted.current){
+      tr.enabled=true; setRtMuted(false); wakeGatedMuted.current=false;
+      if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
+    }
+  },[rtConnected,wakeActive]);
 
   const archiveCurrent = useCallback(() => {
     if (messages.length === 0) return;
