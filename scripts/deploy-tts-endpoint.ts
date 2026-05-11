@@ -142,6 +142,15 @@ if (deployAll) {
     process.exit(1);
   }
 
+  // /api/alaric-bootstrap — HMAC token issuer for realtime-session auth
+  const bootstrapCode = readFileSync(join(ASSETS, "alaric-bootstrap-route.ts"), "utf8");
+  console.log("    ℹ️   Requires secret: ZO_ASK_TOKEN (HMAC secret for 24h session tokens)");
+  try {
+    await deployRoute("alaric-bootstrap", "/api/alaric-bootstrap", bootstrapCode);
+  } catch (err) {
+    console.error("⚠️   /api/alaric-bootstrap failed (non-fatal — Realtime auth chain breaks):", err);
+  }
+
   // /api/realtime-session
   const rtCode = readFileSync(join(ASSETS, "realtime-session-route.ts"), "utf8");
   console.log("    ℹ️   Requires secret: OPENAI_API_KEY (for Realtime mode)");
@@ -149,6 +158,24 @@ if (deployAll) {
     await deployRoute("realtime-session", "/api/realtime-session", rtCode);
   } catch (err) {
     console.error("⚠️   /api/realtime-session failed (non-fatal — Realtime mode won't work):", err);
+  }
+
+  // /api/alaric-mcp — JSON-RPC 2.0 MCP server (v3.0 native MCP wiring)
+  const mcpCode = readFileSync(join(ASSETS, "alaric-mcp-route.ts"), "utf8");
+  console.log("    ℹ️   Requires secrets: ZO_API_KEY, ALARIC_MCP_TOKEN (generate with `openssl rand -hex 32`)");
+  try {
+    await deployRoute("alaric-mcp", "/api/alaric-mcp", mcpCode);
+  } catch (err) {
+    console.error("⚠️   /api/alaric-mcp failed (non-fatal — Realtime tool calls won't work):", err);
+  }
+
+  // /api/alaric-personas — canonical persona catalog (HMAC-authed, ETag-cached)
+  const personasRouteCode = readFileSync(join(ASSETS, "alaric-personas-route.ts"), "utf8");
+  console.log("    ℹ️   Requires secret: ZO_ASK_TOKEN (HMAC verify for x-alaric-auth)");
+  try {
+    await deployRoute("alaric-personas", "/api/alaric-personas", personasRouteCode);
+  } catch (err) {
+    console.error("⚠️   /api/alaric-personas failed (non-fatal — PWA falls back to hardcoded subset):", err);
   }
 
   // ── Fetch personas at deploy time (bake into page as static JSON) ──────────
@@ -245,6 +272,28 @@ if (deployAll) {
     console.error("❌ ", err);
     process.exit(1);
   }
+
+  // ── PWA shell: manifest + service worker (placeholders share pwa-page set) ──
+  const placeholderSubst = (code: string) => code
+    .replace(/\{\{ZO_HOST\}\}/g,            ZO_SPACE_HOST)
+    .replace(/\{\{ASSISTANT_NAME\}\}/g,     assistName)
+    .replace(/\{\{ASSISTANT_SLUG\}\}/g,     assistSlug)
+    .replace(/\{\{PAGE_PATH\}\}/g,          pagePath)
+    .replace(/\{\{PORTRAIT_PATH\}\}/g,      PORTRAIT_URL);
+
+  const manifestCode = placeholderSubst(readFileSync(join(ASSETS, "manifest-route.ts"), "utf8"));
+  try {
+    await deployRoute("manifest", `${pagePath}/manifest`, manifestCode);
+  } catch (err) {
+    console.error("⚠️   manifest route failed (non-fatal — PWA install prompt won't work):", err);
+  }
+
+  const swCode = placeholderSubst(readFileSync(join(ASSETS, "sw-route.ts"), "utf8"));
+  try {
+    await deployRoute("sw", `${pagePath}/sw`, swCode);
+  } catch (err) {
+    console.error("⚠️   service worker route failed (non-fatal — offline mode won't work):", err);
+  }
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
@@ -256,10 +305,13 @@ if (deployAll) {
   console.log(`AI Proxy      : ${ZO_SPACE_HOST}/api/alaric-ask`);
   console.log(`TTS Proxy     : ${ZO_SPACE_HOST}/api/tts`);
   console.log(`RT Sessions   : ${ZO_SPACE_HOST}/api/realtime-session`);
+  console.log(`MCP Server    : ${ZO_SPACE_HOST}/api/alaric-mcp`);
 }
 console.log("\nRequired secrets (Settings > Advanced):");
 if (cfg.secret) console.log(`  ${cfg.secret.padEnd(25)} — TTS API key`);
-if (deployAll)  console.log(`  ZO_ASK_TOKEN              — Zo access token for the AI proxy`);
+if (deployAll)  console.log(`  ZO_ASK_TOKEN              — Zo access token for the AI proxy + zo_ask fallback`);
+if (deployAll)  console.log(`  ZO_API_KEY                — (v3.0) Used by /api/alaric-mcp to call api.zo.computer/mcp`);
+if (deployAll)  console.log(`  ALARIC_MCP_TOKEN          — (v3.0) Shared secret authenticating OpenAI Realtime → MCP server. Generate via 'openssl rand -hex 32'`);
 if (deployAll)  console.log(`  OPENAI_API_KEY            — Only needed for Realtime mode`);
 if (!cfg.secret) console.log("  (none for edge-tts — run setup-edge-tts.sh once)");
 console.log("────────────────────────────────────────────────────────────\n");
