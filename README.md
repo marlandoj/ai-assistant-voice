@@ -1,227 +1,178 @@
 # AI Assistant Voice
 
-A voice interface for [Zo Computer](https://zo.computer) that lets you speak to any AI persona and hear its responses read back aloud. Built as a Progressive Web App (PWA) — it works in your browser, installs to your phone's home screen, and keeps all API keys safely on the server side.
+A voice interface for [Zo Computer](https://zo.computer) personas using **OpenAI Realtime API (GA, `gpt-realtime-2`)** with native MCP tool integration. Speak to any persona, hear it speak back, and let it call your Zo tools directly — all keys stay server-side.
 
-Works with **any persona** you've configured on your Zo Computer — just enter the persona ID and a display name in the settings panel.
-
----
-
-## How it works
-
-1. You speak (or type) a message
-2. Your words are sent to a server-side proxy on your `zo.space`, which forwards the request to your chosen AI persona
-3. The response is read aloud using a text-to-speech engine of your choice
-4. The conversation history stays on screen for reference
-
-The TTS audio is generated server-side — your API keys never touch the browser.
+Built as a Progressive Web App (PWA) deployed to your `zo.space`. Works with any of your Zo personas — pick from the dropdown at runtime.
 
 ---
 
-## What's included
+## Architecture
 
-```
-Skills/ai-assistant-voice/
-├── pwa/                             # The voice interface (browser app)
-│   ├── index.html
-│   ├── app.js
-│   ├── styles.css
-│   ├── manifest.json                # PWA manifest (installable to home screen)
-│   └── sw.js                        # Service worker (offline support, path-agnostic)
-├── scripts/
-│   ├── deploy-tts-endpoint.ts       # Deploy the TTS + AI proxy routes to zo.space
-│   ├── ai-assistant-voice.ts        # CLI: manage voice configs, test speech
-│   └── setup-edge-tts.sh            # One-time install for free edge-tts backend
-└── assets/
-    ├── tts-route.ts                 # ElevenLabs backend (recommended)
-    ├── tts-route-openai.ts          # OpenAI TTS backend
-    ├── tts-route-edge.ts            # edge-tts backend (no API key needed)
-    └── zo-ask-route.ts              # Zo AI proxy (server-side token, no browser exposure)
-```
+![Alaric Voice v3.0 architecture](docs/alaric-voice-v3-architecture-3d.png)
+
+End-to-end flow:
+
+1. **Bootstrap** — PWA POSTs to `/api/alaric-bootstrap`; gets a 24h HMAC session token (`v1.exp.nonce.sig`) signed with `ZO_ASK_TOKEN`.
+2. **Mint session** — PWA POSTs to `/api/realtime-session` with the token + tool pack choice. Server mints an ephemeral OpenAI client secret and attaches the MCP tool config (`server_url`, `allowed_tools`, `require_approval`).
+3. **WebRTC** — PWA opens a Realtime WebRTC session with OpenAI using the ephemeral key. Voice in/out streams over the data channel.
+4. **MCP tool calls** — OpenAI Realtime backend hits `/api/alaric-mcp?t=ALARIC_MCP_TOKEN` directly (no browser hop). The MCP server dispatches to handlers, which call `api.zo.computer/mcp` upstream with `Bearer ZO_API_KEY`.
+5. **Personas** — `/api/alaric-personas` returns the 82-persona catalog (HMAC-authed, ETag-cached) for the dropdown.
+
+### Tool packs
+
+| Pack | Tools | `require_approval` |
+|------|-------|--------------------|
+| `essentials` | 19 — memory, calendar read, email/SMS send, file read, web search | `never` |
+| `power` | 28 — adds image search/gen, transcription, Gmail, calendar create | `never` |
+| `power_with_writes` | 36 — adds agent/automation/route writes, persona switch, publish | per-tool: writes `always`, reads `never` |
+
+---
+
+## Routes deployed by `deploy-tts-endpoint.ts --deploy-all`
+
+| Route | Type | Purpose |
+|-------|------|---------|
+| `/api/tts` | api | TTS proxy (ElevenLabs / OpenAI / edge-tts backends) |
+| `/api/alaric-ask` | api | Text-mode Zo Ask proxy (fallback for non-Realtime mode) |
+| `/api/alaric-bootstrap` | api | HMAC session token issuer (24h TTL) |
+| `/api/realtime-session` | api | OpenAI Realtime session mint + MCP tool config |
+| `/api/alaric-mcp` | api | JSON-RPC 2.0 MCP server, 36 tools, 3-tier auth |
+| `/api/alaric-personas` | api | 82-persona catalog (HMAC + ETag) |
+| `/alaric-voice` | page | The React PWA |
+| `/alaric-voice/manifest` | api | PWA install manifest |
+| `/alaric-voice/sw` | api | Service worker (offline shell) |
 
 ---
 
 ## Requirements
 
 - A [Zo Computer](https://zo.computer) account
-- A Zo API access token saved as `ZO_ASK_TOKEN` in Zo Secrets (Settings → Advanced)
-- A TTS API key — or use the free `edge-tts` backend (no key required)
 - [Bun](https://bun.sh) runtime (pre-installed on Zo)
+- Zo Secrets (Settings → Advanced → Secrets):
+  - `ZO_ASK_TOKEN` — HMAC secret + Zo Ask proxy auth
+  - `ZO_API_KEY` — used by `/api/alaric-mcp` to call upstream Zo MCP
+  - `ALARIC_MCP_TOKEN` — shared secret for OpenAI Realtime → MCP (`openssl rand -hex 32`)
+  - `OPENAI_API_KEY` — for Realtime sessions + OpenAI TTS backend
+  - `ELEVENLABS_API_KEY` — only if using ElevenLabs TTS backend (optional)
 
 ---
 
 ## Installation
 
-### Step 1 — Clone the repo
+### 1. Clone
 
-**Via terminal:**
 ```bash
 git clone https://github.com/marlandoj/ai-assistant-voice.git \
   /home/workspace/Skills/ai-assistant-voice
 ```
 
-**Via natural language** (on your Zo Computer):
-> "Install the ai-assistant-voice skill from GitHub and set it up."
+Or, in natural language to your Zo: *"Install the ai-assistant-voice skill from GitHub and set it up."*
 
----
+### 2. Set secrets
 
-### Step 2 — Set your Zo API token server-side
+In Zo Computer → Settings → Advanced → Secrets:
+- Create an access token, save it as `ZO_ASK_TOKEN`
+- Save your `ZO_API_KEY`, `OPENAI_API_KEY`
+- Generate `ALARIC_MCP_TOKEN`: `openssl rand -hex 32`
 
-The PWA never touches credentials directly — all AI calls are proxied through your `zo.space`. Store your token once:
-
-**In plain language:** Go to Settings → Advanced on your Zo Computer:
-1. Under **Access Tokens** — create a new token and copy it
-2. Under **Secrets** — add a secret named `ZO_ASK_TOKEN` with that token as the value
-
----
-
-### Step 3 — Choose a TTS backend and deploy the proxy
-
-The voice interface needs a server-side TTS proxy. Pick the backend that works for you:
-
-#### Option A — ElevenLabs ⭐ Recommended
-
-Best voice quality. Natural, expressive output.
-
-**In plain language:** Go to Settings → Advanced → Secrets, add `ELEVENLABS_API_KEY` with your key from [elevenlabs.io](https://elevenlabs.io). Then run:
+### 3. Deploy
 
 ```bash
 bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts --deploy-all
 ```
 
----
+Default backend is ElevenLabs. Use `--backend openai` or `--backend edge` to switch.
 
-#### Option B — OpenAI TTS
+### 4. Open the PWA
 
-Very good quality. Six voices. Most users already have an OpenAI key.
+Visit `https://yourhandle.zo.space/alaric-voice` (sign in to view — private by default). Pick a persona from the dropdown, tap the mic, talk.
 
-**In plain language:** Add `OPENAI_API_KEY` to your Zo Secrets, then run:
+### 5. Install to phone (optional)
 
-```bash
-bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts --backend openai --deploy-all
-```
-
-Available voices: `alloy`, `echo`, `fable`, `onyx` (default), `nova`, `shimmer`
-
----
-
-#### Option C — edge-tts (free, no API key)
-
-Uses Microsoft Edge's neural voices. 300+ voices, completely free, no account needed.
-
-```bash
-bash /home/workspace/Skills/ai-assistant-voice/scripts/setup-edge-tts.sh
-bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts --backend edge --deploy-all
-```
-
-Browse voices: `edge-tts --list-voices | grep "en-US"`
-
----
-
-#### Option D — No backend (browser fallback)
-
-Skip this step — the PWA automatically falls back to your browser's built-in speech synthesis. No setup required. Quality varies by device.
-
----
-
-### Step 4 — Open the PWA
-
-Open `pwa/index.html` in your browser, or deploy the `pwa/` directory to any static host or zo.space route.
-
-On first launch, tap the ⚙️ settings icon to configure:
-- **Zo Space Host** — your `yourhandle.zo.space` URL
-- **Persona** — which AI persona to talk to (enter the persona ID from Settings → AI → Personas)
-- **Assistant Name** — display name shown in the chat (e.g. "Alaric", "Nova", "Max")
-- **Voice** — which TTS voice to use
-
-No API keys or tokens are entered in the browser — everything is handled server-side.
-
----
-
-### Step 5 — Install to your phone (optional)
-
-Open the PWA in Chrome or Safari on your phone, then use "Add to Home Screen." It launches full-screen with no browser UI, like a native app.
-
----
-
-## Finding your persona ID
-
-1. Go to [Settings → AI → Personas](/?t=settings&s=ai&d=personas) on your Zo Computer
-2. Click on the persona you want to use
-3. Copy the ID from the URL or persona detail panel
-
----
-
-## CLI usage
-
-The CLI manages voice configs and lets you test TTS from the terminal:
-
-```bash
-cd /home/workspace/Skills/ai-assistant-voice/scripts
-
-# List available ElevenLabs voices
-bun ai-assistant-voice.ts voices
-
-# Save a persona → voice mapping
-bun ai-assistant-voice.ts config set \
-  --persona <your-persona-id> \
-  --name "My Assistant" \
-  --voice ErXwobaYiN019PkySvjV
-
-# View saved mappings
-bun ai-assistant-voice.ts config list
-
-# Test speech output
-bun ai-assistant-voice.ts speak "Hello, how can I help?" --voice ErXwobaYiN019PkySvjV
-```
-
-Voice configs are stored at `~/.zo/voice/persona-voices.json`.
+Open in Chrome/Safari on mobile → "Add to Home Screen." Launches full-screen with offline shell.
 
 ---
 
 ## TTS backend comparison
 
-| Backend | Voice quality | Cost | API key required |
-|---|---|---|---|
+| Backend | Voice quality | Cost | API key |
+|---------|--------------|------|---------|
 | ⭐ ElevenLabs | Best — natural, expressive | ~$0.30 / 1K chars | `ELEVENLABS_API_KEY` |
 | OpenAI TTS | Very good — 6 voices | ~$0.015 / 1K chars | `OPENAI_API_KEY` |
-| edge-tts | Good — 300+ neural voices | Free | None |
-| Browser Speech | Basic | Free | None |
+| edge-tts | Good — 300+ neural voices | Free | none |
+| Browser SpeechSynthesis | Basic | Free | none (fallback) |
+
+In **Realtime mode** (default), OpenAI handles audio synthesis directly via WebRTC — the `/api/tts` proxy is only used in text-mode fallback or for the v1 vanilla shell at `pwa/`.
+
+---
+
+## Repository layout
+
+```
+Skills/ai-assistant-voice/
+├── assets/
+│   ├── alaric-bootstrap-route.ts     # HMAC token issuer
+│   ├── alaric-mcp-route.ts           # JSON-RPC MCP server, 36 tools
+│   ├── alaric-personas-route.ts      # 82-persona catalog
+│   ├── ai-ask-route.ts               # Text-mode Zo Ask proxy
+│   ├── realtime-session-route.ts     # OpenAI Realtime mint
+│   ├── pwa-page.tsx                  # React PWA (placeholderized)
+│   ├── manifest-route.ts             # PWA manifest
+│   ├── sw-route.ts                   # Service worker
+│   ├── tts-route.ts                  # ElevenLabs TTS
+│   ├── tts-route-openai.ts           # OpenAI TTS
+│   ├── tts-route-edge.ts             # edge-tts
+│   └── zo-ask-route.ts               # Legacy (used by v1 vanilla pwa/)
+├── scripts/
+│   ├── deploy-tts-endpoint.ts        # Deploys all routes
+│   ├── ai-assistant-voice.ts         # CLI: voice configs, TTS test
+│   └── setup-edge-tts.sh             # One-time edge-tts install
+├── pwa/                              # v1 vanilla JS shell (legacy)
+└── docs/
+    └── alaric-voice-v3-architecture-3d.png
+```
+
+---
+
+## CLI
+
+```bash
+cd /home/workspace/Skills/ai-assistant-voice/scripts
+
+bun ai-assistant-voice.ts voices                    # List ElevenLabs voices
+bun ai-assistant-voice.ts config set \
+  --persona <persona-id> --name "Alaric" --voice ErXwobaYiN019PkySvjV
+bun ai-assistant-voice.ts config list
+bun ai-assistant-voice.ts speak "Hello, Sir." --voice ErXwobaYiN019PkySvjV
+```
+
+Configs at `~/.zo/voice/persona-voices.json`.
 
 ---
 
 ## Customizing the assistant image
 
-The default avatar is a holographic AI face included in `assets/ai-assistant-default.png`. To use your own image:
+Default avatar is a holographic AI face at `/images/ai-assistant-portrait.png`. To replace:
 
-**Just ask Zo:** *"Change the AI assistant avatar to [describe what you want]"* — Zo will generate a new image and upload it for you.
+Ask Zo: *"Change the AI assistant avatar to [description]"* — it'll generate and upload.
 
-**Or manually:** Replace the asset at `/images/ai-assistant-default.png` on your zo.space:
-```bash
-# Upload a new image from your workspace
-# Use the zo.space asset upload in Settings, or ask Zo to do it
-```
+Or manually: replace the asset at `/images/ai-assistant-portrait.png` on your zo.space.
 
-The image is displayed as a circle (260×260px) with an animated glow effect when speaking.
+The image is displayed as a 260×260 circle with an animated glow when speaking.
 
 ---
 
-## Customizing the TTS route
-
-The route source files are in `assets/`. Edit the one you're using, then re-run the deploy script:
-
-```bash
-# Edit assets/tts-route.ts, then:
-bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts
-```
-
----
-
-## Deploying to a different zo.space host
+## Deploying to a different host or assistant identity
 
 ```bash
 bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts \
-  --backend elevenlabs --host yourhandle.zo.space
+  --deploy-all \
+  --host yourhandle.zo.space \
+  --name "Nova" \
+  --persona <persona-uuid>
 ```
+
+Placeholders in `pwa-page.tsx`, `manifest-route.ts`, `sw-route.ts` (`{{ASSISTANT_NAME}}`, `{{ASSISTANT_SLUG}}`, `{{PAGE_PATH}}`, `{{PORTRAIT_PATH}}`, `{{ZO_HOST}}`, `{{DEFAULT_PERSONA_ID}}`, `{{PERSONAS_JSON}}`) are substituted at deploy time.
 
 ---
 
