@@ -50,7 +50,7 @@
   <g filter="url(#softGlow)">
     <rect x="380" y="170" width="840" height="120" rx="20" fill="#09111F" stroke="#06B6D4" stroke-width="3"/>
   </g>
-  <text x="800" y="208" text-anchor="middle" class="topTitle">Browser PWA  ·  /alaric-voice</text>
+  <text x="800" y="208" text-anchor="middle" class="topTitle">Browser PWA  ·  /&lt;path&gt;</text>
   <text x="800" y="228" text-anchor="middle" class="cardSub">React 19  ·  service worker  ·  installable to home screen</text>
   <g>
     <rect x="404" y="244" width="180" height="28" rx="8" fill="#172133" stroke="#243244"/>
@@ -60,7 +60,7 @@
     <rect x="784" y="244" width="180" height="28" rx="8" fill="#172133" stroke="#243244"/>
     <text x="874" y="263" text-anchor="middle" class="chipText">Push-to-talk + hands-free</text>
     <rect x="974" y="244" width="222" height="28" rx="8" fill="#172133" stroke="#243244"/>
-    <text x="1085" y="263" text-anchor="middle" class="chipText">82-persona dropdown · TTS fallback</text>
+    <text x="1085" y="263" text-anchor="middle" class="chipText">dynamic persona dropdown · TTS fallback</text>
   </g>
 
   <line x1="800" y1="304" x2="800" y2="338" stroke="#0F766E" stroke-width="3" filter="url(#lineGlow)"/>
@@ -76,7 +76,7 @@
 
   <!-- Bootstrap -->
   <text x="240" y="418" text-anchor="middle" class="cardTitle" fill="#FBBF24">HMAC Bootstrap</text>
-  <text x="240" y="438" text-anchor="middle" class="chipMono">/api/alaric-bootstrap</text>
+  <text x="240" y="438" text-anchor="middle" class="chipMono">/api/&lt;slug&gt;-bootstrap</text>
   <g>
     <rect x="80" y="456" width="320" height="28" rx="8" fill="#172133" stroke="#243244"/>
     <text x="240" y="475" text-anchor="middle" class="chipText">Origin gate · POST issuer</text>
@@ -104,7 +104,7 @@
 
   <!-- MCP Server -->
   <text x="1000" y="418" text-anchor="middle" class="cardTitle" fill="#C084FC">MCP Server</text>
-  <text x="1000" y="438" text-anchor="middle" class="chipMono">/api/alaric-mcp</text>
+  <text x="1000" y="438" text-anchor="middle" class="chipMono">/api/&lt;slug&gt;-mcp</text>
   <g>
     <rect x="840" y="456" width="320" height="28" rx="8" fill="#172133" stroke="#243244"/>
     <text x="1000" y="475" text-anchor="middle" class="chipText">JSON-RPC 2.0  ·  tools/list + call</text>
@@ -118,10 +118,10 @@
 
   <!-- Personas -->
   <text x="1370" y="418" text-anchor="middle" class="cardTitle" fill="#F472B6">Persona Catalog</text>
-  <text x="1370" y="438" text-anchor="middle" class="chipMono">/api/alaric-personas</text>
+  <text x="1370" y="438" text-anchor="middle" class="chipMono">/api/&lt;slug&gt;-personas</text>
   <g>
     <rect x="1220" y="456" width="300" height="28" rx="8" fill="#172133" stroke="#243244"/>
-    <text x="1370" y="475" text-anchor="middle" class="chipText">82-persona catalog</text>
+    <text x="1370" y="475" text-anchor="middle" class="chipText">dynamic catalog (list_personas)</text>
     <rect x="1220" y="490" width="300" height="28" rx="8" fill="#172133" stroke="#243244"/>
     <text x="1370" y="509" text-anchor="middle" class="chipText">HMAC-gated · ETag cached</text>
     <rect x="1220" y="524" width="300" height="28" rx="8" fill="#172133" stroke="#243244"/>
@@ -194,7 +194,7 @@
   <text x="812" y="1052" text-anchor="middle" class="cardBody" font-size="14">36 tools · per-call approval</text>
 
   <text x="1128" y="1028" text-anchor="middle" class="cardTitle" fill="#4ADE80" font-size="18">wake gating</text>
-  <text x="1128" y="1052" text-anchor="middle" class="cardBody" font-size="14">mic muted until "Hey Alaric"</text>
+  <text x="1128" y="1052" text-anchor="middle" class="cardBody" font-size="14">mic muted until "Hey &lt;name&gt;"</text>
 
   <text x="1412" y="1028" text-anchor="middle" class="cardTitle" fill="#FDE047" font-size="18">backoff + cap</text>
   <text x="1412" y="1052" text-anchor="middle" class="cardBody" font-size="14">3-attempt + 10s tool cap</text>

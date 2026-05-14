@@ -9,11 +9,11 @@ description: >
 compatibility: Created for Zo Computer
 metadata:
   author: marlandoj.zo.computer
-  version: 3.0.0
+  version: 3.1.0
   requires:
     - ZO_ASK_TOKEN (required — Zo access token for AI proxy, Settings > Advanced)
-    - ZO_API_KEY (required — used by /api/alaric-mcp to call api.zo.computer/mcp)
-    - ALARIC_MCP_TOKEN (required — shared secret authenticating OpenAI Realtime → /api/alaric-mcp)
+    - ZO_API_KEY (required — used by /api/<slug>-mcp to call api.zo.computer/mcp)
+    - ALARIC_MCP_TOKEN (required — shared secret authenticating OpenAI Realtime → /api/<slug>-mcp; opaque identifier, name is stable across forks)
     - OPENAI_API_KEY (required for Realtime mode — GA token mint)
     - ELEVENLABS_API_KEY (optional — for ElevenLabs TTS backend)
 ---
@@ -27,23 +27,25 @@ Full-screen voice AI PWA — works with any persona on your Zo Computer.
 This skill implements a **native MCP pipeline** with OpenAI Realtime GA:
 
 ```
-┌─────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  BROWSER    │◄───►│ GPT-Realtime-2  │◄───►│ /api/alaric-mcp │
-│  (WebRTC)   │     │  (Audio brain)  │     │  (MCP server)   │
-└─────────────┘     └─────────────────┘     └─────────────────┘
-       │                    │                       │
-       │  Speech in         │  Native MCP tool      │  Proxies to
-       │  Audio out         │  config + approval    │  api.zo.computer/mcp
-       │                    │                       │
-       ▼                    ▼                       ▼
-   Realtime GA API     Direct tool calls       36 Zo tools
-   v1/realtime/calls   (no orchestrator hop)   in 3 packs
+┌─────────────┐     ┌─────────────────┐     ┌────────────────────┐
+│  BROWSER    │◄───►│ GPT-Realtime-2  │◄───►│ /api/<slug>-mcp    │
+│  (WebRTC)   │     │  (Audio brain)  │     │  (MCP server)      │
+└─────────────┘     └─────────────────┘     └────────────────────┘
+       │                    │                          │
+       │  Speech in         │  Native MCP tool         │  Proxies to
+       │  Audio out         │  config + approval       │  api.zo.computer/mcp
+       │                    │                          │
+       ▼                    ▼                          ▼
+   Realtime GA API     Direct tool calls          36 Zo tools
+   v1/realtime/calls   (no orchestrator hop)      in 3 packs
 ```
+
+`<slug>` is the lowercased `--name` flag (default `voice`).
 
 | Layer | Path | Purpose |
 |---|---|---|
 | **Audio** | `gpt-realtime-2` via WebRTC | Native speech→speech, ~300ms latency |
-| **MCP server** | `/api/alaric-mcp` on zo.space | JSON-RPC 2.0 endpoint exposing Zo tools to OpenAI |
+| **MCP server** | `/api/<slug>-mcp` on zo.space | JSON-RPC 2.0 endpoint exposing Zo tools to OpenAI |
 | **Tool backend** | `https://api.zo.computer/mcp` | Upstream Zo tool execution |
 
 **Why native MCP?** OpenAI Realtime GA speaks MCP over HTTP directly. Removing the orchestrator hop cuts per-tool latency, lets us expose 36 tools instead of 11, and adds first-class approval gating for write operations.
@@ -57,34 +59,39 @@ One command deploys everything: the PWA page + all API routes.
 ```bash
 # 1. Save required secrets in Settings > Advanced first:
 #    ZO_ASK_TOKEN, ZO_API_KEY, ALARIC_MCP_TOKEN, OPENAI_API_KEY
-# 2. Run:
+# 2. Run with YOUR assistant name + YOUR persona id:
 bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts \
   --deploy-all \
-  --name "Alaric" \
-  --path "/alaric-voice" \
-  --persona-id "9fa5bf37-8fdb-4172-80f0-1bc48eda8911"
+  --name "Aria" \
+  --path "/aria-voice" \
+  --persona-id "<your-persona-uuid>"
 ```
 
-This deploys:
-- `/alaric-voice` — the voice PWA page (private, owner sign-in required)
-- `/api/tts` — TTS proxy (keeps ElevenLabs key server-side)
-- `/api/alaric-ask` — Zo ask proxy (keeps ZO_ASK_TOKEN server-side)
-- `/api/realtime-session` — OpenAI Realtime GA API token endpoint + MCP tool config
-- `/api/alaric-mcp` — MCP server exposing Zo tools (v3.0+)
+The slug (`--name` lowercased; `aria` in this example) drives all route paths.
 
-After deploying, open `https://yourhandle.zo.space/alaric-voice`.
+This deploys:
+- `/aria-voice` — the voice PWA page (private, owner sign-in required)
+- `/api/tts` — TTS proxy (keeps ElevenLabs key server-side)
+- `/api/aria-ask` — Zo ask proxy (keeps ZO_ASK_TOKEN server-side)
+- `/api/aria-bootstrap` — HMAC session-token issuer (24h TTL)
+- `/api/realtime-session` — OpenAI Realtime GA API token endpoint + MCP tool config
+- `/api/aria-mcp` — MCP server exposing Zo tools (v3.0+)
+- `/api/aria-personas` — Dynamic persona catalog (`list_personas` MCP, 5-min ETag cache)
+
+After deploying, open `https://yourhandle.zo.space/aria-voice`.
 
 ### Options
 
 | Flag | Default | Description |
 |---|---|---|
-| `--name "Aria"` | `My Assistant` | Assistant display name shown in UI |
+| `--name "Aria"` | `My Assistant` | Assistant display name; sets the route slug (`/api/<slug>-*`) |
 | `--path "/aria"` | `/ai-assistant-voice` | URL path for the PWA page |
-| `--persona-id <uuid>` | *(none)* | Pre-populate the persona selector |
+| `--persona-id <uuid>` | *(none)* | Default persona (must be one of your Zo personas) |
+| `--default-voice` | `alloy` | Fallback OpenAI voice when persona has no mapping |
 | `--backend openai` | `elevenlabs` | TTS backend (elevenlabs/openai/edge) |
 | `--host myhandle.zo.space` | Auto-detected | Override Zo Space hostname |
 
-Find your persona ID at [Settings → AI → Personas](/?t=settings&s=ai&d=personas).
+Find your persona ID at [Settings → AI → Personas](/?t=settings&s=ai&d=personas). The PWA's persona dropdown is populated at runtime from `list_personas` — your own personas, not anyone else's.
 
 ---
 
@@ -94,9 +101,9 @@ Add these in [Settings → Advanced → Secrets](/?t=settings&s=advanced):
 
 | Secret | Required | Purpose |
 |---|---|---|
-| `ZO_ASK_TOKEN` | ✅ Yes | Zo access token — used by `/api/alaric-ask`. |
-| `ZO_API_KEY` | ✅ Yes | Used by `/api/alaric-mcp` to call `api.zo.computer/mcp`. |
-| `ALARIC_MCP_TOKEN` | ✅ Yes | Shared secret. Sent by `/api/realtime-session` in the MCP server_url query, validated by `/api/alaric-mcp`. Generate via `openssl rand -hex 32`. |
+| `ZO_ASK_TOKEN` | ✅ Yes | Zo access token — used by `/api/<slug>-ask` + HMAC session-token issuer. |
+| `ZO_API_KEY` | ✅ Yes | Used by `/api/<slug>-mcp` + `/api/<slug>-personas` to call `api.zo.computer/mcp`. |
+| `ALARIC_MCP_TOKEN` | ✅ Yes | Shared secret. Sent by `/api/realtime-session` in the MCP server_url query, validated by `/api/<slug>-mcp`. Generate via `openssl rand -hex 32`. Name is a stable, opaque identifier — keep it `ALARIC_MCP_TOKEN` regardless of your assistant's display name. |
 | `OPENAI_API_KEY` | For Realtime mode | GPT-Realtime-2 GA token mint |
 | `ELEVENLABS_API_KEY` | If using ElevenLabs TTS | From elevenlabs.io → Profile → API Keys |
 
@@ -140,9 +147,9 @@ Realtime mode uses **GPT-Realtime-2** with native MCP tool access.
 ### How it works
 
 1. **Connect** → Browser requests ephemeral token + MCP tool config from `/api/realtime-session`
-2. **MCP config** → Session response includes `tools: [{type: "mcp", server_label: "alaric", server_url: "...?t=<ALARIC_MCP_TOKEN>", allowed_tools, require_approval}]`
+2. **MCP config** → Session response includes `tools: [{type: "mcp", server_label: "<slug>", server_url: "...?t=<ALARIC_MCP_TOKEN>", allowed_tools, require_approval}]`
 3. **WebRTC** → Browser exchanges SDP with `api.openai.com/v1/realtime/calls`
-4. **Tool discovery** → OpenAI calls `tools/list` on `/api/alaric-mcp`; emits `mcp_list_tools` event
+4. **Tool discovery** → OpenAI calls `tools/list` on `/api/<slug>-mcp`; emits `mcp_list_tools` event
 5. **Listen & respond** → User speaks; GPT-Realtime-2 calls MCP tools directly when needed
 6. **Approval (writes only)** → For `power_with_writes`, write tools emit `mcp_approval_request`; the PWA must call `mcp_approval_response` to authorize
 
@@ -150,7 +157,7 @@ Realtime mode uses **GPT-Realtime-2** with native MCP tool access.
 
 The zo.space Cloudflare proxy strips `Authorization: Bearer` headers. OpenAI Realtime's MCP integration only supports `authorization` (which maps to that header). The workaround is a query-param token (`?t=<ALARIC_MCP_TOKEN>`) baked into `server_url`. OpenAI redacts path/query from stored logs.
 
-`/api/alaric-mcp` accepts the token in this order:
+`/api/<slug>-mcp` accepts the token in this order:
 1. `X-Alaric-Token` header (preferred for direct callers)
 2. `Authorization: Bearer ...` (works on origins that don't strip it)
 3. `?t=` query (Realtime path)
@@ -176,7 +183,7 @@ v3.0 swaps the per-tool orchestrator hop for native MCP. The PWA no longer touch
 |---|---|---|
 | Tool config | Inline `tools: [function...]` at session.update | Single `{type: "mcp", server_url}` reference |
 | Tool count | 11 (one per function definition) | Up to 36 via `allowed_tools` filter |
-| Tool execution | Browser → `/api/alaric-orchestrator` → Zo | OpenAI → `/api/alaric-mcp` → Zo (no browser hop) |
+| Tool execution | Browser → `/api/<slug>-orchestrator` → Zo | OpenAI → `/api/<slug>-mcp` → Zo (no browser hop) |
 | PWA tool event | `response.function_call_arguments.done` | `response.output_item.added/done` w/ `item.type==='mcp_call'` |
 | Writes | Either always-on or omitted | Per-call approval via `require_approval` |
 | Pack tiering | No | Yes (essentials / power / power_with_writes) |
@@ -223,7 +230,7 @@ bun ai-assistant-voice.ts speak "Hello." --voice ErXwobaYiN019PkySvjV
 - Full-screen mobile-friendly UI with push-to-talk and hands-free modes
 - Wake word activation ("Hey [name]") when tab is active
 - Classic mode: Speech → Zo proxy → AI response → TTS (full context + memory)
-- **Realtime Mode (Native MCP)**: GPT-Realtime-2 calls Zo tools directly via `/api/alaric-mcp`
+- **Realtime Mode (Native MCP)**: GPT-Realtime-2 calls Zo tools directly via `/api/<slug>-mcp`
 - Tool packs: choose `essentials` (read-only) up to `power_with_writes` (36 tools, approval-gated)
 - Persona selector — switch between any of your Zo personas mid-session
 - New session button — clear conversation history
@@ -246,8 +253,8 @@ Configs are saved to `~/.zo/voice/persona-voices.json`:
 
 | Symptom | Root Cause | Fix |
 |---|---|---|
-| Model never calls tools | MCP server unreachable from OpenAI | Check console for `mcp_list_tools`. Test manually: `curl -X POST 'https://<host>/api/alaric-mcp?t=<token>' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'` |
-| `Unauthorized` from `/api/alaric-mcp` | `ALARIC_MCP_TOKEN` missing or wrong | Set the secret; ensure `/api/realtime-session` reads the same env var name |
+| Model never calls tools | MCP server unreachable from OpenAI | Check console for `mcp_list_tools`. Test manually: `curl -X POST 'https://<host>/api/<slug>-mcp?t=<token>' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'` |
+| `Unauthorized` from `/api/<slug>-mcp` | `ALARIC_MCP_TOKEN` missing or wrong | Set the secret; ensure `/api/realtime-session` reads the same env var name |
 | `Authorization: Bearer ...` works locally but not from OpenAI | zo.space proxy strips it | Use `?t=` query-param token (the default for v3.0) |
 | Write tool runs without approval | Pack is `essentials` or `power` (no writes), or `require_approval` is `"never"` | Use `power_with_writes` pack and confirm `require_approval` includes `{always: {tool_names: [...]}}` |
 | `"Unknown parameter: 'model'"` | Sending `model` to `/client_secrets` | Bare `POST {}` — config goes in `tools` instead |
@@ -258,5 +265,5 @@ Configs are saved to `~/.zo/voice/persona-voices.json`:
 ## Historical Notes
 
 - **v2.1.0**: Single-model Realtime with `gpt-4o-mini-realtime-preview` via `/v1/realtime/sessions`. Tools pre-configured at token mint time.
-- **v2.2.0**: Multi-model hybrid with `gpt-realtime-2` GA API. Personality + 11 function tools injected via data channel. `/api/alaric-orchestrator` mediates Zo tool calls.
-- **v3.0.0**: Native MCP. `/api/alaric-mcp` exposes 36 Zo tools to OpenAI Realtime directly. Orchestrator removed from the hot path. Tool packs + approval gating added. Query-param token auth (zo.space proxy strips `Authorization`).
+- **v2.2.0**: Multi-model hybrid with `gpt-realtime-2` GA API. Personality + 11 function tools injected via data channel. `/api/<slug>-orchestrator` mediates Zo tool calls.
+- **v3.0.0**: Native MCP. `/api/<slug>-mcp` exposes 36 Zo tools to OpenAI Realtime directly. Orchestrator removed from the hot path. Tool packs + approval gating added. Query-param token auth (zo.space proxy strips `Authorization`).

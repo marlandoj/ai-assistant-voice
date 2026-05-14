@@ -11,14 +11,18 @@
  *   bun deploy-tts-endpoint.ts --deploy-all \
  *       --name "Aria" \
  *       --path "/aria" \
- *       --persona-id "your-persona-uuid"
+ *       --persona-id "your-persona-uuid" \
+ *       --default-voice "shimmer"
  *   bun deploy-tts-endpoint.ts --host myhandle.zo.space
  *
- * Routes deployed:
- *   /api/tts              — TTS proxy (keeps API key server-side)
- *   /api/ai-ask           — Zo ask proxy (ZO_ASK_TOKEN secret required)
- *   /api/realtime-session — OpenAI Realtime session token (OPENAI_API_KEY required)
- *   /<path>               — The voice PWA page  (--deploy-all only)
+ * Routes deployed (slug = lowercased --name, defaults to "voice"):
+ *   /api/tts                  — TTS proxy (keeps API key server-side)
+ *   /api/<slug>-ask           — Zo ask proxy (ZO_ASK_TOKEN secret required)
+ *   /api/<slug>-bootstrap     — HMAC session-token issuer (24h TTL)
+ *   /api/<slug>-mcp           — JSON-RPC 2.0 MCP server exposing Zo tools
+ *   /api/<slug>-personas      — Dynamic persona catalog (list_personas MCP)
+ *   /api/realtime-session     — OpenAI Realtime session token (OPENAI_API_KEY required)
+ *   /<path>                   — The voice PWA page  (--deploy-all only)
  *
  * One-time prerequisites:
  *   1. ZO_CLIENT_IDENTITY_TOKEN — auto-available on Zo server
@@ -52,6 +56,7 @@ const rawHost      = flag("--host") ?? process.env.ZO_SPACE_HOST ?? "";
 const assistName   = flag("--name") ?? "My Assistant";
 const pagePath     = flag("--path") ?? "/ai-assistant-voice";
 const personaId    = flag("--persona-id") ?? "";
+const defaultVoice = flag("--default-voice") ?? "alloy";
 
 // Derive handle from env or host arg
 const ZO_HANDLE    = rawHost
@@ -64,6 +69,22 @@ if (!ZO_HANDLE && !process.env.ZO_CLIENT_IDENTITY_TOKEN) {
 }
 
 const ZO_SPACE_HOST = `https://${ZO_HANDLE}.zo.space`;
+
+// Slug derived from --name. Used for route paths (/api/<slug>-*) and as
+// MCP server_label. Falls back to "voice" if --name produces an empty slug.
+const assistSlug = (assistName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "voice");
+
+// One central substituter — applied to every route file before deploy so
+// every fork ends up with the host user's name, host, and default persona.
+function substitutePlaceholders(code: string): string {
+  return code
+    .replace(/\{\{ZO_HOST\}\}/g,            ZO_SPACE_HOST)
+    .replace(/\{\{ASSISTANT_NAME\}\}/g,     assistName)
+    .replace(/\{\{ASSISTANT_SLUG\}\}/g,     assistSlug)
+    .replace(/\{\{PAGE_PATH\}\}/g,          pagePath)
+    .replace(/\{\{DEFAULT_PERSONA_ID\}\}/g, personaId)
+    .replace(/\{\{DEFAULT_VOICE\}\}/g,      defaultVoice);
+}
 
 // ─── Backend config ───────────────────────────────────────────────────────────
 const BACKENDS: Record<string, { file: string; secret?: string }> = {
@@ -120,7 +141,7 @@ async function deployRoute(
 }
 
 // ─── Deploy /api/tts ──────────────────────────────────────────────────────────
-const ttsCode = readFileSync(join(ASSETS, cfg.file), "utf8");
+const ttsCode = substitutePlaceholders(readFileSync(join(ASSETS, cfg.file), "utf8"));
 if (cfg.secret) console.log(`    ℹ️   Requires secret: ${cfg.secret} (Settings > Advanced)`);
 
 try {
@@ -132,27 +153,27 @@ try {
 
 // ─── Deploy remaining routes (--deploy-all) ───────────────────────────────────
 if (deployAll) {
-  // /api/alaric-ask
-  const askCode = readFileSync(join(ASSETS, "ai-ask-route.ts"), "utf8");
+  // /api/<slug>-ask
+  const askCode = substitutePlaceholders(readFileSync(join(ASSETS, "ai-ask-route.ts"), "utf8"));
   console.log("    ℹ️   Requires secret: ZO_ASK_TOKEN (Settings > Advanced > Access Tokens → Secrets)");
   try {
-    await deployRoute("alaric-ask", "/api/alaric-ask", askCode);
+    await deployRoute(`${assistSlug}-ask`, `/api/${assistSlug}-ask`, askCode);
   } catch (err) {
     console.error("❌ ", err);
     process.exit(1);
   }
 
-  // /api/alaric-bootstrap — HMAC token issuer for realtime-session auth
-  const bootstrapCode = readFileSync(join(ASSETS, "alaric-bootstrap-route.ts"), "utf8");
+  // /api/<slug>-bootstrap — HMAC token issuer for realtime-session auth
+  const bootstrapCode = substitutePlaceholders(readFileSync(join(ASSETS, "alaric-bootstrap-route.ts"), "utf8"));
   console.log("    ℹ️   Requires secret: ZO_ASK_TOKEN (HMAC secret for 24h session tokens)");
   try {
-    await deployRoute("alaric-bootstrap", "/api/alaric-bootstrap", bootstrapCode);
+    await deployRoute(`${assistSlug}-bootstrap`, `/api/${assistSlug}-bootstrap`, bootstrapCode);
   } catch (err) {
-    console.error("⚠️   /api/alaric-bootstrap failed (non-fatal — Realtime auth chain breaks):", err);
+    console.error(`⚠️   /api/${assistSlug}-bootstrap failed (non-fatal — Realtime auth chain breaks):`, err);
   }
 
-  // /api/realtime-session
-  const rtCode = readFileSync(join(ASSETS, "realtime-session-route.ts"), "utf8");
+  // /api/realtime-session — fixed name (the OpenAI Realtime token endpoint)
+  const rtCode = substitutePlaceholders(readFileSync(join(ASSETS, "realtime-session-route.ts"), "utf8"));
   console.log("    ℹ️   Requires secret: OPENAI_API_KEY (for Realtime mode)");
   try {
     await deployRoute("realtime-session", "/api/realtime-session", rtCode);
@@ -160,22 +181,22 @@ if (deployAll) {
     console.error("⚠️   /api/realtime-session failed (non-fatal — Realtime mode won't work):", err);
   }
 
-  // /api/alaric-mcp — JSON-RPC 2.0 MCP server (v3.0 native MCP wiring)
-  const mcpCode = readFileSync(join(ASSETS, "alaric-mcp-route.ts"), "utf8");
+  // /api/<slug>-mcp — JSON-RPC 2.0 MCP server (v3.0 native MCP wiring)
+  const mcpCode = substitutePlaceholders(readFileSync(join(ASSETS, "alaric-mcp-route.ts"), "utf8"));
   console.log("    ℹ️   Requires secrets: ZO_API_KEY, ALARIC_MCP_TOKEN (generate with `openssl rand -hex 32`)");
   try {
-    await deployRoute("alaric-mcp", "/api/alaric-mcp", mcpCode);
+    await deployRoute(`${assistSlug}-mcp`, `/api/${assistSlug}-mcp`, mcpCode);
   } catch (err) {
-    console.error("⚠️   /api/alaric-mcp failed (non-fatal — Realtime tool calls won't work):", err);
+    console.error(`⚠️   /api/${assistSlug}-mcp failed (non-fatal — Realtime tool calls won't work):`, err);
   }
 
-  // /api/alaric-personas — canonical persona catalog (HMAC-authed, ETag-cached)
-  const personasRouteCode = readFileSync(join(ASSETS, "alaric-personas-route.ts"), "utf8");
-  console.log("    ℹ️   Requires secret: ZO_ASK_TOKEN (HMAC verify for x-alaric-auth)");
+  // /api/<slug>-personas — dynamic catalog from list_personas MCP (HMAC-authed, ETag-cached)
+  const personasRouteCode = substitutePlaceholders(readFileSync(join(ASSETS, "alaric-personas-route.ts"), "utf8"));
+  console.log("    ℹ️   Requires secrets: ZO_ASK_TOKEN (HMAC verify) + ZO_API_KEY (list_personas upstream)");
   try {
-    await deployRoute("alaric-personas", "/api/alaric-personas", personasRouteCode);
+    await deployRoute(`${assistSlug}-personas`, `/api/${assistSlug}-personas`, personasRouteCode);
   } catch (err) {
-    console.error("⚠️   /api/alaric-personas failed (non-fatal — PWA falls back to hardcoded subset):", err);
+    console.error(`⚠️   /api/${assistSlug}-personas failed (non-fatal — persona dropdown empty):`, err);
   }
 
   // ── Fetch personas at deploy time (bake into page as static JSON) ──────────
@@ -252,19 +273,11 @@ if (deployAll) {
     console.warn("⚠️   Portrait upload failed (non-fatal — using GitHub URL):", err);
   }
 
-  // Build assistant slug (lowercase, no spaces)
-  const assistSlug = assistName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-
   // /page route — substitute placeholders (personas baked in, portrait resolved)
-  let pwaCode = readFileSync(join(ASSETS, "pwa-page.tsx"), "utf8");
+  let pwaCode = substitutePlaceholders(readFileSync(join(ASSETS, "pwa-page.tsx"), "utf8"));
   pwaCode = pwaCode
-    .replace(/\{\{ZO_HOST\}\}/g,            ZO_SPACE_HOST)
-    .replace(/\{\{ASSISTANT_NAME\}\}/g,     assistName)
-    .replace(/\{\{ASSISTANT_SLUG\}\}/g,     assistSlug)
-    .replace(/\{\{PAGE_PATH\}\}/g,          pagePath)
-    .replace(/\{\{DEFAULT_PERSONA_ID\}\}/g, personaId)
-    .replace(/\{\{PORTRAIT_PATH\}\}/g,      PORTRAIT_URL)
-    .replace(/\{\{PERSONAS_JSON\}\}/g,      personasJson);
+    .replace(/\{\{PORTRAIT_PATH\}\}/g, PORTRAIT_URL)
+    .replace(/\{\{PERSONAS_JSON\}\}/g, personasJson);
 
   try {
     await deployRoute("pwa-page", pagePath, pwaCode, "page");
@@ -273,22 +286,17 @@ if (deployAll) {
     process.exit(1);
   }
 
-  // ── PWA shell: manifest + service worker (placeholders share pwa-page set) ──
-  const placeholderSubst = (code: string) => code
-    .replace(/\{\{ZO_HOST\}\}/g,            ZO_SPACE_HOST)
-    .replace(/\{\{ASSISTANT_NAME\}\}/g,     assistName)
-    .replace(/\{\{ASSISTANT_SLUG\}\}/g,     assistSlug)
-    .replace(/\{\{PAGE_PATH\}\}/g,          pagePath)
-    .replace(/\{\{PORTRAIT_PATH\}\}/g,      PORTRAIT_URL);
-
-  const manifestCode = placeholderSubst(readFileSync(join(ASSETS, "manifest-route.ts"), "utf8"));
+  // ── PWA shell: manifest + service worker ──
+  const manifestCode = substitutePlaceholders(readFileSync(join(ASSETS, "manifest-route.ts"), "utf8"))
+    .replace(/\{\{PORTRAIT_PATH\}\}/g, PORTRAIT_URL);
   try {
     await deployRoute("manifest", `${pagePath}/manifest`, manifestCode);
   } catch (err) {
     console.error("⚠️   manifest route failed (non-fatal — PWA install prompt won't work):", err);
   }
 
-  const swCode = placeholderSubst(readFileSync(join(ASSETS, "sw-route.ts"), "utf8"));
+  const swCode = substitutePlaceholders(readFileSync(join(ASSETS, "sw-route.ts"), "utf8"))
+    .replace(/\{\{PORTRAIT_PATH\}\}/g, PORTRAIT_URL);
   try {
     await deployRoute("sw", `${pagePath}/sw`, swCode);
   } catch (err) {
@@ -301,17 +309,19 @@ console.log("\n─────────────────────�
 console.log("✅  AI Assistant Voice installation complete!\n");
 console.log(`Zo Space Host : ${ZO_SPACE_HOST}`);
 if (deployAll) {
+  console.log(`Assistant     : ${assistName}  (slug: ${assistSlug})`);
   console.log(`PWA Page      : ${ZO_SPACE_HOST}${pagePath}  (private — sign in to view)`);
-  console.log(`AI Proxy      : ${ZO_SPACE_HOST}/api/alaric-ask`);
+  console.log(`AI Proxy      : ${ZO_SPACE_HOST}/api/${assistSlug}-ask`);
   console.log(`TTS Proxy     : ${ZO_SPACE_HOST}/api/tts`);
   console.log(`RT Sessions   : ${ZO_SPACE_HOST}/api/realtime-session`);
-  console.log(`MCP Server    : ${ZO_SPACE_HOST}/api/alaric-mcp`);
+  console.log(`MCP Server    : ${ZO_SPACE_HOST}/api/${assistSlug}-mcp`);
+  console.log(`Personas      : ${ZO_SPACE_HOST}/api/${assistSlug}-personas  (dynamic — list_personas)`);
 }
 console.log("\nRequired secrets (Settings > Advanced):");
 if (cfg.secret) console.log(`  ${cfg.secret.padEnd(25)} — TTS API key`);
-if (deployAll)  console.log(`  ZO_ASK_TOKEN              — Zo access token for the AI proxy + zo_ask fallback`);
-if (deployAll)  console.log(`  ZO_API_KEY                — (v3.0) Used by /api/alaric-mcp to call api.zo.computer/mcp`);
-if (deployAll)  console.log(`  ALARIC_MCP_TOKEN          — (v3.0) Shared secret authenticating OpenAI Realtime → MCP server. Generate via 'openssl rand -hex 32'`);
+if (deployAll)  console.log(`  ZO_ASK_TOKEN              — Zo access token for the AI proxy + HMAC session-token issuer`);
+if (deployAll)  console.log(`  ZO_API_KEY                — Used by /api/${assistSlug}-mcp + /api/${assistSlug}-personas to call api.zo.computer`);
+if (deployAll)  console.log(`  ALARIC_MCP_TOKEN          — Shared secret authenticating OpenAI Realtime → MCP server. Generate via 'openssl rand -hex 32'`);
 if (deployAll)  console.log(`  OPENAI_API_KEY            — Only needed for Realtime mode`);
 if (!cfg.secret) console.log("  (none for edge-tts — run setup-edge-tts.sh once)");
 console.log("────────────────────────────────────────────────────────────\n");

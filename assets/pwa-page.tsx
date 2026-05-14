@@ -12,11 +12,13 @@ const RT_MODEL = "gpt-realtime-2";
 const PERSONAS_ENDPOINT = `${ZO_SPACE}/api/{{ASSISTANT_SLUG}}-personas`;
 const BOOTSTRAP_ENDPOINT = `${ZO_SPACE}/api/{{ASSISTANT_SLUG}}-bootstrap`;
 
+// Single-entry fallback when both the baked PERSONAS_JSON and the dynamic
+// /api/<slug>-personas route are unavailable. Empty {{DEFAULT_PERSONA_ID}}
+// is filtered out at render time so the dropdown stays empty rather than
+// pointing at a UUID the user doesn't own.
 const FALLBACK_PERSONAS: PersonaOption[] = [
-  { id: "{{DEFAULT_PERSONA_ID}}", name: "{{ASSISTANT_NAME}} Voice", voice: "ash" },
-  { id: "9fa5bf37-8fdb-4172-80f0-1bc48eda8911", name: "{{ASSISTANT_NAME}}", voice: "sage" },
-  { id: "edb62603-779c-4e8e-bbcd-33f5126212e1", name: "Mimir", voice: "ballad" },
-];
+  { id: "{{DEFAULT_PERSONA_ID}}", name: "{{ASSISTANT_NAME}}", voice: "{{DEFAULT_VOICE}}" },
+].filter(p => p.id && p.id.length === 36);
 const DEFAULT_PERSONA_ID = "{{DEFAULT_PERSONA_ID}}";
 
 const ELEVEN_VOICES: Record<string, string> = {
@@ -27,13 +29,13 @@ const ELEVEN_VOICES: Record<string, string> = {
 };
 const RT_VOICES = ["echo", "shimmer", "alloy", "ash", "coral", "sage", "verse"];
 
-// Slow tools (median > 5s) get a one-line filler so Sir hears something while we wait.
+// Slow tools (median > 5s) get a one-line filler so the user hears something while we wait.
 const SLOW_TOOL_NUDGES: Record<string, string> = {
-  list_calendar_events: "Checking your calendar, Sir.",
-  list_open_loops: "Pulling your open loops, Sir.",
-  list_automations: "Fetching your automations, Sir.",
-  list_agents: "Pulling your agents, Sir.",
-  zo_ask: "One moment, Sir — consulting the workspace.",
+  list_calendar_events: "Checking your calendar.",
+  list_open_loops: "Pulling your open loops.",
+  list_automations: "Fetching your automations.",
+  list_agents: "Pulling your agents.",
+  zo_ask: "One moment — consulting the workspace.",
 };
 
 // ── Token cache ───────────────────────────────────────────────────────

@@ -52,7 +52,7 @@ function buildCors(origin: string | undefined): Record<string, string> {
   const allow =
     origin && ALLOWED_ORIGIN_REGEX.test(origin)
       ? origin
-      : "https://marlandoj.zo.space";
+      : "{{ZO_HOST}}";
   return {
     "Access-Control-Allow-Origin": allow,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -112,7 +112,7 @@ function buildToolRoutingSuffix(pack: string): string {
     "",
     "",
     "TOOL USE — CRITICAL:",
-    "You have a JARVIS-style MCP toolkit at your disposal via the `alaric` MCP server. Prefer the most specific tool. Selection guide:",
+    "You have a JARVIS-style MCP toolkit at your disposal via the `{{ASSISTANT_SLUG}}` MCP server. Prefer the most specific tool. Selection guide:",
     "",
     "• \"open loops\" / \"what's in progress\" / \"pending\" / \"backlog\" → list_open_loops",
     "• \"what do you remember\" / \"recall\" / prior decisions / project history → memory_search",
@@ -165,10 +165,10 @@ function buildToolRoutingSuffix(pack: string): string {
     "2. NEVER say \"I don't have access to your X\" — call the corresponding tool.",
     "3. Call tools immediately and silently — do NOT announce \"I'll check X\" before calling a tool. Just call it.",
     "4. If one tool returns insufficient information, call another relevant tool in the SAME response. Chain all needed tool calls silently before speaking.",
-    "5. After ALL needed tools have returned, deliver the final answer in-character (formal, concise, address as \"Sir\"). You MUST speak the result — never end a response after a tool call without delivering the spoken answer.",
-    "6. If a tool errors or times out, briefly tell Sir what happened.",
+    "5. After ALL needed tools have returned, deliver the final answer in-character and in the persona's voice. You MUST speak the result — never end a response after a tool call without delivering the spoken answer.",
+    "6. If a tool errors or times out, briefly explain what happened.",
     "",
-    "ALWAYS address the user as \"Sir\". Keep spoken responses to 1-3 short sentences unless Sir asks for detail.",
+    "Keep spoken responses to 1-3 short sentences unless the user explicitly asks for detail.",
   );
   return lines.join("\n");
 }
@@ -258,24 +258,18 @@ function resolvePersona(personaId: string): PersonaRecord | null {
   return personaCache.records.get(personaId) ?? null;
 }
 
-const ALARIC_INSTRUCTIONS = `You are Alaric, a J.A.R.V.I.S.-inspired AI assistant serving Marland Johnson ("Sir").
+// Fallback instructions used when the configured persona has no prompt of its own
+// (or list_personas is unreachable). Brand-neutral; the live identity comes from
+// the user's Zo personas, fetched dynamically.
+const FALLBACK_INSTRUCTIONS = `You are {{ASSISTANT_NAME}}, a voice AI assistant.
 
-Personality: formal yet warm, refined language with subtle wit. Always address the user as "Sir". Be a loyal, discreet, proactive support system. Keep spoken responses to 1-3 short sentences unless Sir asks for detail.`;
+Personality: warm, articulate, helpful. Keep spoken responses to 1-3 short sentences unless the user explicitly asks for detail.`;
 
-const PERSONA_VOICE_MAP: Record<string, string> = {
-  "fe5d7648-140a-4277-a7d4-7d8d7bf4aee8": "ash",
-  "9fa5bf37-8fdb-4172-80f0-1bc48eda8911": "sage",
-  "a686c117-9d81-4ffe-8b69-ce566bd3995d": "alloy",
-  "0c6c5c34-c4e3-4591-ad0c-8df8f65fcb81": "coral",
-  "7c1544eb-3d24-419c-897a-5163d3d32c05": "echo",
-  "edb62603-779c-4e8e-bbcd-33f5126212e1": "ballad",
-  "dbe6c73c-69e7-41e2-b42a-194f64a1e976": "verse",
-  "430d27cd-483c-41d1-9088-c758fcd610aa": "sage",
-  "0bf07a32-1880-434a-9ad4-26a341b041f7": "shimmer",
-  "34e1e995-18cc-4a7b-83f6-8c1e95fada1e": "echo",
-};
+// Default voice if no persona-specific mapping is configured at deploy time.
+// Override via --default-voice flag on the deploy script.
+const DEFAULT_VOICE = "{{DEFAULT_VOICE}}";
 
-const DEFAULT_PERSONA_ID = "fe5d7648-140a-4277-a7d4-7d8d7bf4aee8";
+const DEFAULT_PERSONA_ID = "{{DEFAULT_PERSONA_ID}}";
 
 export default async (c: Context): Promise<Response> => {
   const origin = c.req.header("origin");
@@ -323,7 +317,7 @@ export default async (c: Context): Promise<Response> => {
   const ALLOWED_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"];
   const requestedPersonaId = typeof body?.persona_id === "string" && body.persona_id.length === 36
     ? body.persona_id
-    : DEFAULT_PERSONA_ID;
+    : (DEFAULT_PERSONA_ID || "");
   const requestedPack = typeof body?.pack === "string" && TOOL_PACKS[body.pack] ? body.pack : "essentials";
 
   if (zoApiKey) await refreshPersonaCache(zoApiKey).catch(() => {});
@@ -333,18 +327,18 @@ export default async (c: Context): Promise<Response> => {
 
   const baseInstructions = personaPrompt
     ? personaPrompt
-    : ALARIC_INSTRUCTIONS;
+    : FALLBACK_INSTRUCTIONS;
   const instructions = `${baseInstructions}${buildToolRoutingSuffix(requestedPack)}`;
 
-  const personaVoice = PERSONA_VOICE_MAP[requestedPersonaId] || "alloy";
-  const candidate = ALLOWED_VOICES.includes(requestedVoice) ? requestedVoice : personaVoice;
+  const fallbackVoice = ALLOWED_VOICES.includes(DEFAULT_VOICE) ? DEFAULT_VOICE : "alloy";
+  const candidate = ALLOWED_VOICES.includes(requestedVoice) ? requestedVoice : fallbackVoice;
   const voice = ALLOWED_VOICES.includes(candidate) ? candidate : "alloy";
 
   const mcpToken = process.env.ALARIC_MCP_TOKEN;
   if (!mcpToken) {
     return jsonError({ error: "mcp_unconfigured", detail: "ALARIC_MCP_TOKEN not set" }, 503, cors);
   }
-  const mcpUrl = `https://marlandoj.zo.space/api/alaric-mcp?t=${encodeURIComponent(mcpToken)}`;
+  const mcpUrl = `{{ZO_HOST}}/api/{{ASSISTANT_SLUG}}-mcp?t=${encodeURIComponent(mcpToken)}`;
   const allowedTools = TOOL_PACKS[requestedPack];
 
   let requireApproval: unknown = "never";
@@ -359,7 +353,7 @@ export default async (c: Context): Promise<Response> => {
 
   const mcpTool = {
     type: "mcp",
-    server_label: "alaric",
+    server_label: "{{ASSISTANT_SLUG}}",
     server_url: mcpUrl,
     allowed_tools: allowedTools,
     require_approval: requireApproval,
@@ -396,7 +390,7 @@ export default async (c: Context): Promise<Response> => {
     ...data,
     persona: {
       id: requestedPersonaId,
-      name: persona?.name || "Alaric (fallback)",
+      name: persona?.name || "{{ASSISTANT_NAME}} (fallback)",
       voice,
       prompt_resolved: !!personaPrompt,
     },

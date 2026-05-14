@@ -10,13 +10,13 @@ Built as a Progressive Web App (PWA) deployed to your `zo.space`. Works with any
 
 ![AI Assistant Voice v3.0 architecture](docs/alaric-voice-v3-architecture.png)
 
-End-to-end flow:
+End-to-end flow (`<slug>` is the lowercased `--name` flag, default `voice`):
 
-1. **Bootstrap** — PWA POSTs to `/api/alaric-bootstrap`; gets a 24h HMAC session token (`v1.exp.nonce.sig`) signed with `ZO_ASK_TOKEN`.
+1. **Bootstrap** — PWA POSTs to `/api/<slug>-bootstrap`; gets a 24h HMAC session token (`v1.exp.nonce.sig`) signed with `ZO_ASK_TOKEN`.
 2. **Mint session** — PWA POSTs to `/api/realtime-session` with the token + tool pack choice. Server mints an ephemeral OpenAI client secret and attaches the MCP tool config (`server_url`, `allowed_tools`, `require_approval`).
 3. **WebRTC** — PWA opens a Realtime WebRTC session with OpenAI using the ephemeral key. Voice in/out streams over the data channel.
-4. **MCP tool calls** — OpenAI Realtime backend hits `/api/alaric-mcp?t=ALARIC_MCP_TOKEN` directly (no browser hop). The MCP server dispatches to handlers, which call `api.zo.computer/mcp` upstream with `Bearer ZO_API_KEY`.
-5. **Personas** — `/api/alaric-personas` returns the 82-persona catalog (HMAC-authed, ETag-cached) for the dropdown.
+4. **MCP tool calls** — OpenAI Realtime backend hits `/api/<slug>-mcp?t=ALARIC_MCP_TOKEN` directly (no browser hop). The MCP server dispatches to handlers, which call `api.zo.computer/mcp` upstream with `Bearer ZO_API_KEY`.
+5. **Personas** — `/api/<slug>-personas` calls the upstream `list_personas` MCP tool at request time and returns **your own** persona catalog (no hardcoded list — works for any Zo handle). HMAC-authed, 5-min ETag cache.
 
 ### Tool packs
 
@@ -30,17 +30,19 @@ End-to-end flow:
 
 ## Routes deployed by `deploy-tts-endpoint.ts --deploy-all`
 
+The `<slug>` is derived from `--name` (e.g. `--name "Aria"` → `aria-*`). Defaults to `voice` if no name is given. The `<path>` is `--path` (default `/ai-assistant-voice`).
+
 | Route | Type | Purpose |
 |-------|------|---------|
 | `/api/tts` | api | TTS proxy (ElevenLabs / OpenAI / edge-tts backends) |
-| `/api/alaric-ask` | api | Text-mode Zo Ask proxy (fallback for non-Realtime mode) |
-| `/api/alaric-bootstrap` | api | HMAC session token issuer (24h TTL) |
+| `/api/<slug>-ask` | api | Text-mode Zo Ask proxy (fallback for non-Realtime mode) |
+| `/api/<slug>-bootstrap` | api | HMAC session token issuer (24h TTL) |
 | `/api/realtime-session` | api | OpenAI Realtime session mint + MCP tool config |
-| `/api/alaric-mcp` | api | JSON-RPC 2.0 MCP server, 36 tools, 3-tier auth |
-| `/api/alaric-personas` | api | 82-persona catalog (HMAC + ETag) |
-| `/alaric-voice` | page | The React PWA |
-| `/alaric-voice/manifest` | api | PWA install manifest |
-| `/alaric-voice/sw` | api | Service worker (offline shell) |
+| `/api/<slug>-mcp` | api | JSON-RPC 2.0 MCP server, 36 tools, 3-tier auth |
+| `/api/<slug>-personas` | api | Dynamic persona catalog — `list_personas` MCP (HMAC + ETag) |
+| `<path>` | page | The React PWA |
+| `<path>/manifest` | api | PWA install manifest |
+| `<path>/sw` | api | Service worker (offline shell) |
 
 ---
 
@@ -50,7 +52,7 @@ End-to-end flow:
 - [Bun](https://bun.sh) runtime (pre-installed on Zo)
 - Zo Secrets (Settings → Advanced → Secrets):
   - `ZO_ASK_TOKEN` — HMAC secret + Zo Ask proxy auth
-  - `ZO_API_KEY` — used by `/api/alaric-mcp` to call upstream Zo MCP
+  - `ZO_API_KEY` — used by `/api/<slug>-mcp` + `/api/<slug>-personas` to call upstream Zo MCP
   - `ALARIC_MCP_TOKEN` — shared secret for OpenAI Realtime → MCP (`openssl rand -hex 32`)
   - `OPENAI_API_KEY` — for Realtime sessions + OpenAI TTS backend
   - `ELEVENLABS_API_KEY` — only if using ElevenLabs TTS backend (optional)
@@ -85,7 +87,7 @@ Default backend is ElevenLabs. Use `--backend openai` or `--backend edge` to swi
 
 ### 4. Open the PWA
 
-Visit `https://yourhandle.zo.space/alaric-voice` (sign in to view — private by default). Pick a persona from the dropdown, tap the mic, talk.
+Visit `https://yourhandle.zo.space<path>` (default `/ai-assistant-voice`, private — sign in to view). Pick a persona from the dropdown (populated dynamically from your own Zo personas), tap the mic, talk.
 
 ### 5. Install to phone (optional)
 
@@ -111,9 +113,9 @@ In **Realtime mode** (default), OpenAI handles audio synthesis directly via WebR
 ```
 Skills/ai-assistant-voice/
 ├── assets/
-│   ├── alaric-bootstrap-route.ts     # HMAC token issuer
-│   ├── alaric-mcp-route.ts           # JSON-RPC MCP server, 36 tools
-│   ├── alaric-personas-route.ts      # 82-persona catalog
+│   ├── alaric-bootstrap-route.ts     # HMAC token issuer (template)
+│   ├── alaric-mcp-route.ts           # JSON-RPC MCP server, 36 tools (template)
+│   ├── alaric-personas-route.ts      # Dynamic persona catalog via list_personas (template)
 │   ├── ai-ask-route.ts               # Text-mode Zo Ask proxy
 │   ├── realtime-session-route.ts     # OpenAI Realtime mint
 │   ├── pwa-page.tsx                  # React PWA (placeholderized)
@@ -142,7 +144,7 @@ cd /home/workspace/Skills/ai-assistant-voice/scripts
 
 bun ai-assistant-voice.ts voices                    # List ElevenLabs voices
 bun ai-assistant-voice.ts config set \
-  --persona <persona-id> --name "Alaric" --voice ErXwobaYiN019PkySvjV
+  --persona <persona-id> --name "My Assistant" --voice ErXwobaYiN019PkySvjV
 bun ai-assistant-voice.ts config list
 bun ai-assistant-voice.ts speak "Hello, Sir." --voice ErXwobaYiN019PkySvjV
 ```
@@ -163,17 +165,32 @@ The image is displayed as a 260×260 circle with an animated glow when speaking.
 
 ---
 
-## Deploying to a different host or assistant identity
+## Configuring assistant identity
+
+The skill is brand-neutral. Every public-facing identity surface is configured at deploy time via flags.
 
 ```bash
 bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts \
   --deploy-all \
   --host yourhandle.zo.space \
   --name "Nova" \
-  --persona <persona-uuid>
+  --path "/nova" \
+  --persona-id "<your-persona-uuid>" \
+  --default-voice "shimmer"
 ```
 
-Placeholders in `pwa-page.tsx`, `manifest-route.ts`, `sw-route.ts` (`{{ASSISTANT_NAME}}`, `{{ASSISTANT_SLUG}}`, `{{PAGE_PATH}}`, `{{PORTRAIT_PATH}}`, `{{ZO_HOST}}`, `{{DEFAULT_PERSONA_ID}}`, `{{PERSONAS_JSON}}`) are substituted at deploy time.
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--name` | `My Assistant` | Display name in UI; sets `<slug>` for route paths (`/api/<slug>-*`) |
+| `--path` | `/ai-assistant-voice` | URL path for the PWA page |
+| `--persona-id` | *(none)* | Default persona — usually one of your own from [Settings → AI → Personas](/?t=settings&s=ai&d=personas) |
+| `--default-voice` | `alloy` | Fallback OpenAI voice when the persona has none configured |
+| `--host` | Auto-detected | Override Zo Space hostname |
+
+Placeholders substituted at deploy time across every route + the PWA page:
+`{{ASSISTANT_NAME}}`, `{{ASSISTANT_SLUG}}`, `{{ZO_HOST}}`, `{{PAGE_PATH}}`, `{{DEFAULT_PERSONA_ID}}`, `{{DEFAULT_VOICE}}`, `{{PORTRAIT_PATH}}`, `{{PERSONAS_JSON}}`.
+
+The persona dropdown is populated **dynamically** — `/api/<slug>-personas` calls the upstream `list_personas` MCP tool on every request (5-min ETag cache), so each fork sees its own personas with zero hardcoded UUIDs.
 
 ---
 

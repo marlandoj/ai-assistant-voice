@@ -31,7 +31,7 @@ function buildCors(origin: string | undefined): Record<string, string> {
   const allow =
     origin && ALLOWED_ORIGIN_REGEX.test(origin)
       ? origin
-      : "https://marlandoj.zo.space";
+      : "{{ZO_HOST}}";
   return {
     "Access-Control-Allow-Origin": allow,
     "Access-Control-Allow-Methods": "POST, OPTIONS",

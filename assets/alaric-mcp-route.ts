@@ -145,7 +145,7 @@ const TOOL_DEFINITIONS: Array<{
   // -------- ESSENTIALS --------
   {
     name: "list_open_loops",
-    description: "List Sir's currently open work items (loops/tasks-in-progress) from his workspace memory. Use when he asks about open loops, current work, what's in progress, what's pending, or backlog.",
+    description: "List the user's currently open work items (loops/tasks-in-progress) from his workspace memory. Use when they ask about open loops, current work, what's in progress, what's pending, or backlog.",
     inputSchema: {
       type: "object",
       properties: {
@@ -156,7 +156,7 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "memory_search",
-    description: "Search Sir's persistent memory (facts, decisions, preferences, conventions, project state) via FTS over shared-facts.db. Use when he asks 'what do you remember about X', 'recall Z', or any question about prior decisions, project history, or stored facts.",
+    description: "Search the user's persistent memory (facts, decisions, preferences, conventions, project state) via FTS over shared-facts.db. Use when they ask 'what do you remember about X', 'recall Z', or any question about prior decisions, project history, or stored facts.",
     inputSchema: {
       type: "object",
       properties: {
@@ -169,17 +169,17 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "list_agents",
-    description: "List Sir's persistent Zo agents (long-running named assistants).",
+    description: "List the user's persistent Zo agents (long-running named assistants).",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "list_automations",
-    description: "List Sir's scheduled automations (cron-style scheduled tasks).",
+    description: "List the user's scheduled automations (cron-style scheduled tasks).",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "list_calendar_events",
-    description: "List upcoming events on Sir's primary Google Calendar.",
+    description: "List upcoming events on the user's primary Google Calendar.",
     inputSchema: {
       type: "object",
       properties: {
@@ -189,7 +189,7 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "send_email",
-    description: "Send Sir a markdown email. Use when he says 'email me', 'send me an email', 'follow up by email'.",
+    description: "Send the user a markdown email. Use when they say 'email me', 'send me an email', 'follow up by email'.",
     inputSchema: {
       type: "object",
       properties: {
@@ -201,7 +201,7 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "send_sms",
-    description: "Send Sir an SMS text message. Use when he says 'text me', 'send me a text', 'sms me'.",
+    description: "Send the user an SMS text message. Use when they say 'text me', 'send me a text', 'sms me'.",
     inputSchema: {
       type: "object",
       properties: {
@@ -224,7 +224,7 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "workspace_search",
-    description: "Grep Sir's workspace for content or filenames.",
+    description: "Grep the user's workspace for content or filenames.",
     inputSchema: {
       type: "object",
       properties: {
@@ -259,17 +259,17 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "list_personas",
-    description: "List Sir's available Zo personas.",
+    description: "List the user's available Zo personas.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "list_user_services",
-    description: "List Sir's hosted user services (HTTP/TCP/process services).",
+    description: "List the user's hosted user services (HTTP/TCP/process services).",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "get_space_errors",
-    description: "Check for runtime errors in Sir's zo.space routes.",
+    description: "Check for runtime errors in the user's zo.space routes.",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -343,7 +343,7 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "save_webpage",
-    description: "Save a webpage to Sir's Articles folder for later reference.",
+    description: "Save a webpage to the user's Articles folder for later reference.",
     inputSchema: {
       type: "object",
       properties: {
@@ -387,7 +387,7 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "gmail_search",
-    description: "Search Sir's Gmail with a query (e.g. 'from:boss subject:invoice newer_than:7d').",
+    description: "Search the user's Gmail with a query (e.g. 'from:boss subject:invoice newer_than:7d').",
     inputSchema: {
       type: "object",
       properties: {
@@ -422,7 +422,7 @@ const TOOL_DEFINITIONS: Array<{
   // -------- POWER_WITH_WRITES --------
   {
     name: "set_active_persona",
-    description: "Switch Sir's active Zo persona by ID. Affects subsequent chat sessions.",
+    description: "Switch the user's active Zo persona by ID. Affects subsequent chat sessions.",
     inputSchema: {
       type: "object",
       properties: {

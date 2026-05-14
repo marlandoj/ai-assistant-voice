@@ -401,7 +401,7 @@ function buildSettingsPanel() {
       <div class="setting-group">
         <label class="setting-label">Persona ID</label>
         <input type="text" class="setting-input" id="persona-id-input"
-          placeholder="e.g. fe5d7648-140a-4277-a7d4-7d8d7bf4aee8"
+          placeholder="UUID — e.g. 00000000-0000-0000-0000-000000000000"
           autocomplete="off" spellcheck="false"/>
         <p class="setting-hint">
           Find persona IDs in
