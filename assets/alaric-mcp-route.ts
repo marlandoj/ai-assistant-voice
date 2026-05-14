@@ -5,7 +5,6 @@
 //                      in the server_url query (?t=...) since the zo.space
 //                      Cloudflare proxy strips Authorization: Bearer.
 //   ZO_API_KEY       — used to call api.zo.computer/mcp upstream.
-//   ZO_ASK_TOKEN     — used only by the zo_ask fallback tool.
 //
 // JSON-RPC methods implemented:
 //   initialize, notifications/initialized, tools/list, tools/call, ping
@@ -19,9 +18,7 @@ import type { Context } from "hono";
 import { timingSafeEqual } from "node:crypto";
 
 const ZO_MCP_ENDPOINT = "https://api.zo.computer/mcp";
-const ZO_ASK_ENDPOINT = "https://api.zo.computer/zo/ask";
 const SHARED_FACTS_DB = "/home/workspace/.zo/memory/shared-facts.db";
-const ALARIC_PERSONA_ID = "fe5d7648-140a-4277-a7d4-7d8d7bf4aee8";
 
 const rlBuckets = new Map<string, number[]>();
 const RL_WINDOW_MS = 60_000;
@@ -321,17 +318,6 @@ const TOOL_DEFINITIONS: Array<{
       required: ["url"],
     },
   },
-  {
-    name: "zo_ask",
-    description: "FALLBACK ONLY — full Zo agent loop, slow (~30-60s). Use only for ambiguous, multi-step queries the specific tools cannot satisfy.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Natural-language query." },
-      },
-      required: ["query"],
-    },
-  },
   // -------- POWER --------
   {
     name: "image_search",
@@ -589,44 +575,6 @@ async function handleMemorySearch(args: any, apiKey: string) {
   return toolResult(`Memory hits for "${query}" (${lines.length}):\n${summary}`);
 }
 
-async function handleZoAsk(args: any, zoToken: string) {
-  const query = String(args?.query || "").trim();
-  if (!query) return toolResult("missing query", true);
-  const enrichedQuery = `[Realtime MCP fallback] ${query}`;
-  const ZO_ASK_TIMEOUT_MS = 60_000;
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), ZO_ASK_TIMEOUT_MS);
-  try {
-    const resp = await fetch(ZO_ASK_ENDPOINT, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${zoToken}`,
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify({
-        input: enrichedQuery,
-        persona_id: ALARIC_PERSONA_ID,
-      }),
-      signal: ac.signal,
-    });
-    clearTimeout(timer);
-    const text = await resp.text();
-    if (!resp.ok) return toolResult(`Zo API ${resp.status}: ${text.slice(0, 300)}`, true);
-    const data = JSON.parse(text);
-    return toolResult(String(data.output ?? "Completed."));
-  } catch (err: any) {
-    clearTimeout(timer);
-    const isTimeout = err?.name === "AbortError";
-    return toolResult(
-      isTimeout
-        ? `Workspace lookup timed out after 60s. Try narrowing the query.`
-        : err?.message || "Unknown error",
-      true,
-    );
-  }
-}
-
 // =========================================================================
 // PASS-THROUGH HANDLERS (sanitized wrappers around Zo MCP tools)
 // =========================================================================
@@ -879,7 +827,7 @@ async function handlePublishSite(args: any, apiKey: string) {
 // DISPATCHER
 // =========================================================================
 
-async function dispatchTool(name: string, args: any, apiKey: string, zoToken: string) {
+async function dispatchTool(name: string, args: any, apiKey: string) {
   switch (name) {
     case "list_open_loops": return await handleListOpenLoops(args, apiKey);
     case "memory_search": return await handleMemorySearch(args, apiKey);
@@ -899,7 +847,6 @@ async function dispatchTool(name: string, args: any, apiKey: string, zoToken: st
     case "find_similar_links": return await handleFindSimilarLinks(args, apiKey);
     case "maps_search": return await handleMapsSearch(args, apiKey);
     case "read_webpage": return await handleReadWebpage(args, apiKey);
-    case "zo_ask": return await handleZoAsk(args, zoToken);
     case "image_search": return await handleImageSearch(args, apiKey);
     case "generate_image": return await handleGenerateImage(args, apiKey);
     case "save_webpage": return await handleSaveWebpage(args, apiKey);
@@ -1000,11 +947,18 @@ export default async (c: Context): Promise<Response> => {
     const toolName = String(params?.name || "");
     const toolArgs = params?.arguments || {};
     const apiKey = process.env.ZO_API_KEY;
-    const zoToken = process.env.ZO_ASK_TOKEN;
     if (!apiKey) return jsonRpcOk(id, toolResult("ZO_API_KEY not configured", true));
-    if (toolName === "zo_ask" && !zoToken) return jsonRpcOk(id, toolResult("ZO_ASK_TOKEN not configured", true));
     try {
-      const result = await dispatchTool(toolName, toolArgs, apiKey, zoToken || "");
+      const REALTIME_HARD_CAP_MS = 10_000;
+      const result = await Promise.race([
+        dispatchTool(toolName, toolArgs, apiKey),
+        new Promise<ReturnType<typeof toolResult>>((resolve) =>
+          setTimeout(
+            () => resolve(toolResult("That's taking longer than real-time allows. I'll send the result via SMS once it completes — ask me to follow up.", false)),
+            REALTIME_HARD_CAP_MS,
+          )
+        ),
+      ]);
       return jsonRpcOk(id, result);
     } catch (err: any) {
       console.error(`[alaric-mcp] tool error ${toolName}:`, err);

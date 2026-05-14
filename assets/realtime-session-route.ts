@@ -81,7 +81,7 @@ const TOOL_PACK_ESSENTIALS = [
   "list_calendar_events", "send_email", "send_sms", "read_file",
   "workspace_search", "web_search", "list_files", "list_personas",
   "list_user_services", "get_space_errors", "web_research", "find_similar_links",
-  "maps_search", "read_webpage", "zo_ask",
+  "maps_search", "read_webpage",
 ];
 const TOOL_PACK_POWER = [
   ...TOOL_PACK_ESSENTIALS,
@@ -159,14 +159,14 @@ function buildToolRoutingSuffix(pack: string): string {
     );
   }
   lines.push(
-    "• AMBIGUOUS or multi-step things none of the above cover → zo_ask (slow, last resort)",
     "",
     "Hard rules:",
     "1. NEVER claim you cannot access information — call a tool instead.",
     "2. NEVER say \"I don't have access to your X\" — call the corresponding tool.",
-    "3. zo_ask is ~10-30× slower than specific tools. Use it only when no specific tool fits.",
-    "4. After a tool returns, deliver the answer in-character (formal, concise, address as \"Sir\").",
-    "5. If a tool errors or times out, briefly tell Sir what happened.",
+    "3. Call tools immediately and silently — do NOT announce \"I'll check X\" before calling a tool. Just call it.",
+    "4. If one tool returns insufficient information, call another relevant tool in the SAME response. Chain all needed tool calls silently before speaking.",
+    "5. After ALL needed tools have returned, deliver the final answer in-character (formal, concise, address as \"Sir\"). You MUST speak the result — never end a response after a tool call without delivering the spoken answer.",
+    "6. If a tool errors or times out, briefly tell Sir what happened.",
     "",
     "ALWAYS address the user as \"Sir\". Keep spoken responses to 1-3 short sentences unless Sir asks for detail.",
   );

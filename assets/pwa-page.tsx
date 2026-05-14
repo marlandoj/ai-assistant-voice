@@ -31,6 +31,8 @@ const RT_VOICES = ["echo", "shimmer", "alloy", "ash", "coral", "sage", "verse"];
 const SLOW_TOOL_NUDGES: Record<string, string> = {
   list_calendar_events: "Checking your calendar, Sir.",
   list_open_loops: "Pulling your open loops, Sir.",
+  list_automations: "Fetching your automations, Sir.",
+  list_agents: "Pulling your agents, Sir.",
   zo_ask: "One moment, Sir — consulting the workspace.",
 };
 
@@ -545,22 +547,12 @@ export default function AlaricVoicePWA() {
         if(evt.part?.type==="audio"){setIsSpeaking(true);}
         break;
       case"response.output_item.added":
-        // Fire slow-tool nudge as soon as the MCP call begins (call is in-flight from OpenAI's side).
-        if(evt.item?.type==="mcp_call"){
-          const toolName = evt.item?.name || "";
-          const nudge = SLOW_TOOL_NUDGES[toolName];
+        // Show typing indicator while MCP call is in-flight.
+        // Do NOT send response.create here — it fires a competing response that
+        // cuts off the native MCP execution cycle and prevents the result from
+        // being spoken automatically.
+        if (evt.item?.type === "mcp_call") {
           setIsTyping(true);
-          if(nudge && dcRef.current && dcRef.current.readyState === "open"){
-            try {
-              dcRef.current.send(JSON.stringify({
-                type: "response.create",
-                response: {
-                  instructions: `Say exactly: "${nudge}" Then stop. Do not call any tools.`,
-                  tool_choice: "none",
-                },
-              }));
-            } catch {}
-          }
         }
         break;
       case"response.output_item.done":
@@ -571,17 +563,26 @@ export default function AlaricVoicePWA() {
           const errored = !!evt.item?.error;
           const summary = errored ? `[${toolName}] error: ${evt.item?.error}` : `[${toolName}] ✓`;
           setMessages(m=>[...m,{role:"system",text:summary,time:ts()}]);
+          // Realtime native MCP does not auto-continue after tool completion — explicitly
+          // trigger the model to speak the result. Skip on error (model will handle via instructions).
+          if(!errored && dcRef.current && dcRef.current.readyState === "open"){
+            try { dcRef.current.send(JSON.stringify({ type: "response.create" })); } catch {}
+          }
         } else if(evt.item?.role==="assistant"&&evt.item?.content?.length>0){
           const text=evt.item.content.map((c:any)=>c.transcript||c.text||"").filter(Boolean).join(" ");
           if(text) setMessages(m=>[...m,{role:"assistant",text,time:ts()}]);
-          // Wake-gate: after assistant finishes replying, re-mute mic so wake word must fire again.
-          if(wakeGatedMuted.current && localStream.current){
-            if(rtRemuteTimer.current) clearTimeout(rtRemuteTimer.current);
-            rtRemuteTimer.current = setTimeout(()=>{
-              const tr=localStream.current?.getAudioTracks()[0];
-              if(tr){ tr.enabled=false; setRtMuted(true); }
-            }, 1500);
-          }
+        }
+        break;
+      case"response.done":
+        // Re-mute mic after the ENTIRE response (all items) is complete — not on each intermediate item.
+        // This prevents the re-mute race where an intermediate speech item fires the timer
+        // before the model has finished generating the final spoken answer after a tool call.
+        if(wakeGatedMuted.current && localStream.current){
+          if(rtRemuteTimer.current) clearTimeout(rtRemuteTimer.current);
+          rtRemuteTimer.current = setTimeout(()=>{
+            const tr=localStream.current?.getAudioTracks()[0];
+            if(tr){ tr.enabled=false; setRtMuted(true); }
+          }, 1500);
         }
         break;
       case"error": showToast(`Realtime error: ${evt.error?.message||"unknown"}`,"error",setToast_); break;
@@ -617,33 +618,58 @@ export default function AlaricVoicePWA() {
   const connectRealtime = useCallback(async()=>{
     if(rtConnected||rtConnecting) return;
     setRtConnecting(true);
-    try {
-      const sesResp = await authedFetch(RT_SESSION, { method:"POST", body: JSON.stringify({ persona_id: personaId, pack: "essentials" }) });
-      if(!sesResp.ok){const err=await sesResp.json().catch(()=>({}));throw new Error((err as any).error||`Session error ${sesResp.status}`);}
-      const session=await sesResp.json();
-      const token=session.value;
-      if(!token) throw new Error("No ephemeral token");
-      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-      localStream.current=stream;
-      const pc=new RTCPeerConnection(); pcRef.current=pc;
-      const audio=new Audio(); audio.autoplay=true; audioRef.current=audio;
-      pc.ontrack=(e)=>{audio.srcObject=e.streams[0];};
-      pc.addTrack(stream.getTracks()[0]);
-      const dc=pc.createDataChannel("oai-events"); dcRef.current=dc;
-      dc.onmessage=handleRtEvent;
-      dc.onerror=(e)=>{ console.error("[realtime] dc error", e); };
-      dc.onopen=()=>{
-        setRtConnected(true);
-        setRtConnecting(false);
-        showToast("Realtime connected — just start talking!","success",setToast_);
-      };
-      const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
-      const sdpResp=await fetch(`https://api.openai.com/v1/realtime/calls?model=${RT_MODEL}`,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/sdp"},body:offer.sdp});
-      if(!sdpResp.ok) throw new Error(`OpenAI SDP error ${sdpResp.status}`);
-      await pc.setRemoteDescription({type:"answer",sdp:await sdpResp.text()});
-    } catch(err:any){
-      setRtConnecting(false); showToast(`Connect failed: ${err?.message}`,"error",setToast_); disconnectRealtime();
+    const MAX_RETRIES = 3;
+    let lastErr = "";
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const sesResp = await authedFetch(RT_SESSION, { method:"POST", body: JSON.stringify({ persona_id: personaId, pack: "essentials" }) });
+        if(!sesResp.ok){
+          const err=await sesResp.json().catch(()=>({}));
+          throw new Error((err as any).error||`Session error ${sesResp.status}`);
+        }
+        const session=await sesResp.json();
+        const token=session.value;
+        if(!token) throw new Error("No ephemeral token");
+        const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+        localStream.current=stream;
+        const pc=new RTCPeerConnection(); pcRef.current=pc;
+        const audio=new Audio(); audio.autoplay=true; audioRef.current=audio;
+        pc.ontrack=(e)=>{audio.srcObject=e.streams[0];};
+        pc.addTrack(stream.getTracks()[0]);
+        const dc=pc.createDataChannel("oai-events"); dcRef.current=dc;
+        dc.onmessage=handleRtEvent;
+        dc.onerror=(e)=>{ console.error("[realtime] dc error", e); };
+        dc.onopen=()=>{
+          setRtConnected(true);
+          setRtConnecting(false);
+          showToast("Realtime connected — just start talking!","success",setToast_);
+        };
+        const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+        const sdpResp=await fetch(`https://api.openai.com/v1/realtime/calls?model=${RT_MODEL}`,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/sdp"},body:offer.sdp});
+        if(!sdpResp.ok) {
+          const body = await sdpResp.text().catch(()=>"");
+          let detail = `OpenAI SDP error ${sdpResp.status}`;
+          if (sdpResp.status === 429) {
+            detail = "OpenAI Realtime rate limit reached (429). Try again in 60s, or switch to Low Latency/Browser mode.";
+          }
+          if (body) detail += " — " + body.slice(0, 200);
+          throw new Error(detail);
+        }
+        await pc.setRemoteDescription({type:"answer",sdp:await sdpResp.text()});
+        return; // success
+      } catch(err:any){
+        lastErr = err?.message || "Unknown error";
+        console.error(`[realtime] attempt ${attempt + 1}/${MAX_RETRIES} failed:`, lastErr);
+        disconnectRealtime();
+        if (attempt < MAX_RETRIES - 1) {
+          const delay = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+          showToast(`Retrying in ${delay/1000}s… (${attempt + 1}/${MAX_RETRIES})`, "warn", setToast_, delay);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
     }
+    setRtConnecting(false);
+    showToast(`Connect failed after ${MAX_RETRIES} attempts: ${lastErr}`, "error", setToast_);
   },[personaId,rtConnected,rtConnecting,handleRtEvent]);
 
   function disconnectRealtime(){
