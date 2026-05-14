@@ -1,5 +1,7 @@
 # AI Assistant Voice
 
+![Zo Voice AI Assistant](docs/hero-banner.png)
+
 A voice interface for [Zo Computer](https://zo.computer) personas using **OpenAI Realtime API (GA, `gpt-realtime-2`)** with native MCP tool integration. Speak to any persona, hear it speak back, and let it call your Zo tools directly — all keys stay server-side.
 
 Built as a Progressive Web App (PWA) deployed to your `zo.space`. Works with any of your Zo personas — pick from the dropdown at runtime.
