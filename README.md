@@ -15,7 +15,7 @@ End-to-end flow (`<slug>` is the lowercased `--name` flag, default `voice`):
 1. **Bootstrap** — PWA POSTs to `/api/<slug>-bootstrap`; gets a 24h HMAC session token (`v1.exp.nonce.sig`) signed with `ZO_ASK_TOKEN`.
 2. **Mint session** — PWA POSTs to `/api/realtime-session` with the token + tool pack choice. Server mints an ephemeral OpenAI client secret and attaches the MCP tool config (`server_url`, `allowed_tools`, `require_approval`).
 3. **WebRTC** — PWA opens a Realtime WebRTC session with OpenAI using the ephemeral key. Voice in/out streams over the data channel.
-4. **MCP tool calls** — OpenAI Realtime backend hits `/api/<slug>-mcp?t=ALARIC_MCP_TOKEN` directly (no browser hop). The MCP server dispatches to handlers, which call `api.zo.computer/mcp` upstream with `Bearer ZO_API_KEY`.
+4. **MCP tool calls** — OpenAI Realtime backend hits `/api/<slug>-mcp?t=<shared-secret>` directly (no browser hop). The MCP server dispatches to handlers, which call `api.zo.computer/mcp` upstream with `Bearer ZO_API_KEY`. The env-var name holding the shared secret is configurable (default `MCP_SHARED_TOKEN`).
 5. **Personas** — `/api/<slug>-personas` calls the upstream `list_personas` MCP tool at request time and returns **your own** persona catalog (no hardcoded list — works for any Zo handle). HMAC-authed, 5-min ETag cache.
 
 ### Tool packs
@@ -53,9 +53,10 @@ The `<slug>` is derived from `--name` (e.g. `--name "Aria"` → `aria-*`). Defau
 - Zo Secrets (Settings → Advanced → Secrets):
   - `ZO_ASK_TOKEN` — HMAC secret + Zo Ask proxy auth
   - `ZO_API_KEY` — used by `/api/<slug>-mcp` + `/api/<slug>-personas` to call upstream Zo MCP
-  - `ALARIC_MCP_TOKEN` — shared secret for OpenAI Realtime → MCP (`openssl rand -hex 32`)
+  - `MCP_SHARED_TOKEN` — shared secret for OpenAI Realtime → MCP (`openssl rand -hex 32`). The env-var **name** is configurable; pass `--mcp-token-secret YOUR_NAME` to the deploy script to rename it (e.g. `ARIA_MCP_TOKEN`).
   - `OPENAI_API_KEY` — for Realtime sessions + OpenAI TTS backend
   - `ELEVENLABS_API_KEY` — only if using ElevenLabs TTS backend (optional)
+  - `MEMORY_DB_PATH` — *optional.* Absolute path to a SQLite memory backend exposing `facts`/`facts_fts`/`open_loops` tables for the `memory_search` + `list_open_loops` tools. Default `/home/workspace/.zo/memory/shared-facts.db`. If unset or the file doesn't exist, those tools degrade gracefully ("memory not configured") and the rest of the assistant works unchanged.
 
 ---
 
@@ -75,7 +76,7 @@ Or, in natural language to your Zo: *"Install the ai-assistant-voice skill from 
 In Zo Computer → Settings → Advanced → Secrets:
 - Create an access token, save it as `ZO_ASK_TOKEN`
 - Save your `ZO_API_KEY`, `OPENAI_API_KEY`
-- Generate `ALARIC_MCP_TOKEN`: `openssl rand -hex 32`
+- Generate the MCP shared secret: `openssl rand -hex 32`, save as `MCP_SHARED_TOKEN` (or any name you prefer — see step 3)
 
 ### 3. Deploy
 
@@ -84,6 +85,17 @@ bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts --d
 ```
 
 Default backend is ElevenLabs. Use `--backend openai` or `--backend edge` to switch.
+
+**Rename the MCP token secret** (optional). The shared-secret env var defaults to `MCP_SHARED_TOKEN`. To use a custom name, pass `--mcp-token-secret`:
+
+```bash
+bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts \
+  --deploy-all \
+  --name "Aria" \
+  --mcp-token-secret "ARIA_MCP_TOKEN"
+```
+
+The flag value is upper-cased and sanitized to `[A-Z0-9_]`. Save your generated secret under whatever name you pass — both the MCP server route and the Realtime session route will read `process.env[<that name>]`.
 
 ### 4. Open the PWA
 

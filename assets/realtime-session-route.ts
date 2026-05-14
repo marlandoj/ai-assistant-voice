@@ -334,9 +334,10 @@ export default async (c: Context): Promise<Response> => {
   const candidate = ALLOWED_VOICES.includes(requestedVoice) ? requestedVoice : fallbackVoice;
   const voice = ALLOWED_VOICES.includes(candidate) ? candidate : "alloy";
 
-  const mcpToken = process.env.ALARIC_MCP_TOKEN;
+  const MCP_TOKEN_ENV = "{{MCP_TOKEN_ENV}}";
+  const mcpToken = process.env[MCP_TOKEN_ENV];
   if (!mcpToken) {
-    return jsonError({ error: "mcp_unconfigured", detail: "ALARIC_MCP_TOKEN not set" }, 503, cors);
+    return jsonError({ error: "mcp_unconfigured", detail: `${MCP_TOKEN_ENV} not set` }, 503, cors);
   }
   const mcpUrl = `{{ZO_HOST}}/api/{{ASSISTANT_SLUG}}-mcp?t=${encodeURIComponent(mcpToken)}`;
   const allowedTools = TOOL_PACKS[requestedPack];

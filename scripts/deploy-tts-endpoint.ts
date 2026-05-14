@@ -12,7 +12,8 @@
  *       --name "Aria" \
  *       --path "/aria" \
  *       --persona-id "your-persona-uuid" \
- *       --default-voice "shimmer"
+ *       --default-voice "shimmer" \
+ *       --mcp-token-secret "ARIA_MCP_TOKEN"
  *   bun deploy-tts-endpoint.ts --host myhandle.zo.space
  *
  * Routes deployed (slug = lowercased --name, defaults to "voice"):
@@ -58,6 +59,17 @@ const pagePath     = flag("--path") ?? "/ai-assistant-voice";
 const personaId    = flag("--persona-id") ?? "";
 const defaultVoice = flag("--default-voice") ?? "alloy";
 
+// Env-var name holding the shared MCP token. Defaults to the generic
+// MCP_SHARED_TOKEN so a freshly cloned repo doesn't bake any one user's
+// assistant name into the secret. Pass --mcp-token-secret to override
+// (e.g. --mcp-token-secret "ARIA_MCP_TOKEN").
+const rawTokenSecret = flag("--mcp-token-secret") ?? "MCP_SHARED_TOKEN";
+const mcpTokenEnv = rawTokenSecret.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+if (!/^[A-Z_][A-Z0-9_]*$/.test(mcpTokenEnv)) {
+  console.error(`❌  Invalid --mcp-token-secret "${rawTokenSecret}". Must match /^[A-Z_][A-Z0-9_]*$/ after upper-casing.`);
+  process.exit(1);
+}
+
 // Derive handle from env or host arg
 const ZO_HANDLE    = rawHost
   ? rawHost.replace(/^https?:\/\//, "").replace(".zo.space", "")
@@ -83,7 +95,8 @@ function substitutePlaceholders(code: string): string {
     .replace(/\{\{ASSISTANT_SLUG\}\}/g,     assistSlug)
     .replace(/\{\{PAGE_PATH\}\}/g,          pagePath)
     .replace(/\{\{DEFAULT_PERSONA_ID\}\}/g, personaId)
-    .replace(/\{\{DEFAULT_VOICE\}\}/g,      defaultVoice);
+    .replace(/\{\{DEFAULT_VOICE\}\}/g,      defaultVoice)
+    .replace(/\{\{MCP_TOKEN_ENV\}\}/g,      mcpTokenEnv);
 }
 
 // ─── Backend config ───────────────────────────────────────────────────────────
@@ -183,7 +196,7 @@ if (deployAll) {
 
   // /api/<slug>-mcp — JSON-RPC 2.0 MCP server (v3.0 native MCP wiring)
   const mcpCode = substitutePlaceholders(readFileSync(join(ASSETS, "alaric-mcp-route.ts"), "utf8"));
-  console.log("    ℹ️   Requires secrets: ZO_API_KEY, ALARIC_MCP_TOKEN (generate with `openssl rand -hex 32`)");
+  console.log(`    ℹ️   Requires secrets: ZO_API_KEY, ${mcpTokenEnv} (generate with \`openssl rand -hex 32\`)`);
   try {
     await deployRoute(`${assistSlug}-mcp`, `/api/${assistSlug}-mcp`, mcpCode);
   } catch (err) {
@@ -321,7 +334,8 @@ console.log("\nRequired secrets (Settings > Advanced):");
 if (cfg.secret) console.log(`  ${cfg.secret.padEnd(25)} — TTS API key`);
 if (deployAll)  console.log(`  ZO_ASK_TOKEN              — Zo access token for the AI proxy + HMAC session-token issuer`);
 if (deployAll)  console.log(`  ZO_API_KEY                — Used by /api/${assistSlug}-mcp + /api/${assistSlug}-personas to call api.zo.computer`);
-if (deployAll)  console.log(`  ALARIC_MCP_TOKEN          — Shared secret authenticating OpenAI Realtime → MCP server. Generate via 'openssl rand -hex 32'`);
+if (deployAll)  console.log(`  ${mcpTokenEnv.padEnd(25)} — Shared secret authenticating OpenAI Realtime → MCP server. Generate via 'openssl rand -hex 32'. (override env-var name with --mcp-token-secret)`);
+if (deployAll)  console.log(`  MEMORY_DB_PATH            — Optional. Absolute path to a SQLite memory backend (default: /home/workspace/.zo/memory/shared-facts.db). When unset/missing, memory_search degrades gracefully.`);
 if (deployAll)  console.log(`  OPENAI_API_KEY            — Only needed for Realtime mode`);
 if (!cfg.secret) console.log("  (none for edge-tts — run setup-edge-tts.sh once)");
 console.log("────────────────────────────────────────────────────────────\n");

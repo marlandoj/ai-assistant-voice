@@ -48,19 +48,19 @@
   <text x="800" y="148" text-anchor="middle" class="section">CLIENT SURFACE</text>
 
   <g filter="url(#softGlow)">
-    <rect x="380" y="170" width="840" height="120" rx="20" fill="#09111F" stroke="#06B6D4" stroke-width="3"/>
+    <rect x="320" y="170" width="960" height="120" rx="20" fill="#09111F" stroke="#06B6D4" stroke-width="3"/>
   </g>
   <text x="800" y="208" text-anchor="middle" class="topTitle">Browser PWA  ·  /&lt;path&gt;</text>
   <text x="800" y="228" text-anchor="middle" class="cardSub">React 19  ·  service worker  ·  installable to home screen</text>
   <g>
-    <rect x="404" y="244" width="180" height="28" rx="8" fill="#172133" stroke="#243244"/>
-    <text x="494" y="263" text-anchor="middle" class="chipText">WebRTC mic + audio</text>
-    <rect x="594" y="244" width="180" height="28" rx="8" fill="#172133" stroke="#243244"/>
-    <text x="684" y="263" text-anchor="middle" class="chipText">Wake-word gating</text>
-    <rect x="784" y="244" width="180" height="28" rx="8" fill="#172133" stroke="#243244"/>
-    <text x="874" y="263" text-anchor="middle" class="chipText">Push-to-talk + hands-free</text>
-    <rect x="974" y="244" width="222" height="28" rx="8" fill="#172133" stroke="#243244"/>
-    <text x="1085" y="263" text-anchor="middle" class="chipText">dynamic persona dropdown · TTS fallback</text>
+    <rect x="344" y="244" width="220" height="28" rx="8" fill="#172133" stroke="#243244"/>
+    <text x="454" y="263" text-anchor="middle" class="chipText">WebRTC mic + audio</text>
+    <rect x="576" y="244" width="220" height="28" rx="8" fill="#172133" stroke="#243244"/>
+    <text x="686" y="263" text-anchor="middle" class="chipText">Wake-word gating</text>
+    <rect x="808" y="244" width="220" height="28" rx="8" fill="#172133" stroke="#243244"/>
+    <text x="918" y="263" text-anchor="middle" class="chipText">Push-to-talk + hands-free</text>
+    <rect x="1040" y="244" width="220" height="28" rx="8" fill="#172133" stroke="#243244"/>
+    <text x="1150" y="263" text-anchor="middle" class="chipText">Persona picker · TTS fallback</text>
   </g>
 
   <line x1="800" y1="304" x2="800" y2="338" stroke="#0F766E" stroke-width="3" filter="url(#lineGlow)"/>
@@ -170,7 +170,7 @@
     <rect x="840" y="858" width="340" height="28" rx="8" fill="#172133" stroke="#243244"/>
     <text x="1010" y="877" text-anchor="middle" class="chipText">Persona switch · publish</text>
     <rect x="1190" y="858" width="330" height="28" rx="8" fill="#172133" stroke="#243244"/>
-    <text x="1355" y="877" text-anchor="middle" class="chipMono">shared-facts.db</text>
+    <text x="1355" y="877" text-anchor="middle" class="chipText">Pluggable memory backend</text>
   </g>
 
   <line x1="800" y1="934" x2="800" y2="966" stroke="#0F766E" stroke-width="3" filter="url(#lineGlow)"/>

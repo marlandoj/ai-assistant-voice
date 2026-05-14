@@ -1,24 +1,39 @@
-// /api/alaric-mcp — JSON-RPC 2.0 MCP server exposing Zo tools to OpenAI Realtime.
+// /api/<slug>-mcp — JSON-RPC 2.0 MCP server exposing Zo tools to OpenAI Realtime.
 //
 // Required Zo Secrets:
-//   ALARIC_MCP_TOKEN — shared secret (32-byte hex). OpenAI Realtime sends this
+//   {{MCP_TOKEN_ENV}} — shared secret (32-byte hex). OpenAI Realtime sends this
 //                      in the server_url query (?t=...) since the zo.space
-//                      Cloudflare proxy strips Authorization: Bearer.
-//   ZO_API_KEY       — used to call api.zo.computer/mcp upstream.
+//                      Cloudflare proxy strips Authorization: Bearer. The env-var
+//                      name is configurable via the deploy script's
+//                      --mcp-token-secret flag (default: MCP_SHARED_TOKEN).
+//   ZO_API_KEY        — used to call api.zo.computer/mcp upstream.
+//
+// Optional Zo Secrets:
+//   MEMORY_DB_PATH    — absolute path to a SQLite memory backend exposing
+//                       `open_loops` and `facts_fts` tables. If unset or the
+//                       file is missing, the memory_search and list_open_loops
+//                       tools are advertised but degrade gracefully with a
+//                       "memory not configured" response. Default:
+//                       /home/workspace/.zo/memory/shared-facts.db
 //
 // JSON-RPC methods implemented:
 //   initialize, notifications/initialized, tools/list, tools/call, ping
 //
 // Auth precedence (first match wins):
-//   1. X-Alaric-Token header
+//   1. X-Mcp-Token header
 //   2. Authorization: Bearer ...
 //   3. ?t= query param (Realtime path)
 
 import type { Context } from "hono";
 import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 
 const ZO_MCP_ENDPOINT = "https://api.zo.computer/mcp";
-const SHARED_FACTS_DB = "/home/workspace/.zo/memory/shared-facts.db";
+const DEFAULT_MEMORY_DB = "/home/workspace/.zo/memory/shared-facts.db";
+const MEMORY_DB_PATH = process.env.MEMORY_DB_PATH || DEFAULT_MEMORY_DB;
+function memoryBackendAvailable(): boolean {
+  try { return existsSync(MEMORY_DB_PATH); } catch { return false; }
+}
 
 const rlBuckets = new Map<string, number[]>();
 const RL_WINDOW_MS = 60_000;
@@ -156,13 +171,13 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "memory_search",
-    description: "Search the user's persistent memory (facts, decisions, preferences, conventions, project state) via FTS over shared-facts.db. Use when they ask 'what do you remember about X', 'recall Z', or any question about prior decisions, project history, or stored facts.",
+    description: "Search the user's persistent memory (facts, decisions, preferences, conventions, project state) via FTS over a pluggable SQLite backend (default: shared-facts.db; override with MEMORY_DB_PATH). Use when they ask 'what do you remember about X', 'recall Z', or any question about prior decisions, project history, or stored facts. Degrades gracefully when no memory backend is configured.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Search terms (sanitized to alnum + space + dash + underscore)." },
         limit: { type: "integer", description: "Max hits (1-20). Default 5." },
-        scope: { type: "string", enum: ["any", "shared", "alaric", "alaric-voice"], description: "Persona scope. Default 'any'." },
+        scope: { type: "string", description: "Persona scope filter (e.g. 'shared', '<persona-slug>'). Default 'any' returns all scopes." },
       },
       required: ["query"],
     },
@@ -524,13 +539,16 @@ const TOOL_DEFINITIONS: Array<{
 // =========================================================================
 
 async function handleListOpenLoops(args: any, apiKey: string) {
+  if (!memoryBackendAvailable()) {
+    return toolResult(`Memory backend not configured (no file at ${MEMORY_DB_PATH}). Set MEMORY_DB_PATH in Zo Secrets to point at a SQLite DB exposing an 'open_loops' table.`, true);
+  }
   const limit = Math.min(Math.max(parseInt(args?.limit ?? "10", 10) || 10, 1), 50);
   const ALLOWED = new Set(["open", "resolved", "stale", "superseded", "all"]);
   const requested = String(args?.status ?? "open");
   if (!ALLOWED.has(requested)) return toolResult("invalid status; allowed: open|resolved|stale|superseded|all", true);
   const where = requested === "all" ? "" : `WHERE status='${requested}'`;
   const sql = `SELECT id || '|' || title || '|' || kind || '|' || priority FROM open_loops ${where} ORDER BY priority DESC, updated_at DESC LIMIT ${limit};`;
-  const cmd = `sqlite3 ${SHARED_FACTS_DB} "${sql.replace(/"/g, '\\"')}"`;
+  const cmd = `sqlite3 ${MEMORY_DB_PATH} "${sql.replace(/"/g, '\\"')}"`;
   const r = await callZoMcp("run_bash_command", { cmd }, apiKey, 10_000);
   if (!r.ok) return toolResult(r.error, true);
   const m = r.text.match(/stdout='([\s\S]*?)', stderr=/);
@@ -548,17 +566,19 @@ async function handleListOpenLoops(args: any, apiKey: string) {
 }
 
 async function handleMemorySearch(args: any, apiKey: string) {
+  if (!memoryBackendAvailable()) {
+    return toolResult(`Memory backend not configured (no file at ${MEMORY_DB_PATH}). Set MEMORY_DB_PATH in Zo Secrets to point at a SQLite DB exposing 'facts' + 'facts_fts' tables.`, true);
+  }
   const rawQuery = String(args?.query || "").trim();
   if (!rawQuery) return toolResult("missing query", true);
   const query = rawQuery.replace(/[^a-zA-Z0-9 _\-]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
   if (!query) return toolResult("query empty after sanitization", true);
   const limit = Math.min(Math.max(parseInt(args?.limit ?? "5", 10) || 5, 1), 20);
-  const allowedScopes = new Set(["shared", "alaric", "alaric-voice", "any"]);
-  const requestedScope = String(args?.scope ?? "any");
-  const scope = allowedScopes.has(requestedScope) ? requestedScope : "any";
-  const personaFilter = scope === "any" ? "" : `AND f.persona = '${scope}'`;
+  const requestedScope = String(args?.scope ?? "any").trim();
+  const safeScope = /^[a-zA-Z0-9_\-]{1,40}$/.test(requestedScope) ? requestedScope : "any";
+  const personaFilter = safeScope === "any" ? "" : `AND f.persona = '${safeScope}'`;
   const sql = `SELECT f.entity || '.' || COALESCE(f.key,'') || '|' || substr(f.value,1,200) || '|' || f.decay_class || '|' || COALESCE(f.persona,'shared') FROM facts_fts ft JOIN facts f ON f.rowid=ft.rowid WHERE facts_fts MATCH '${query}' ${personaFilter} ORDER BY rank LIMIT ${limit};`;
-  const cmd = `sqlite3 ${SHARED_FACTS_DB} "${sql.replace(/"/g, '\\"')}"`;
+  const cmd = `sqlite3 ${MEMORY_DB_PATH} "${sql.replace(/"/g, '\\"')}"`;
   const r = await callZoMcp("run_bash_command", { cmd }, apiKey, 10_000);
   if (!r.ok) return toolResult(r.error, true);
   const m = r.text.match(/stdout='([\s\S]*?)', stderr=/);
@@ -895,11 +915,12 @@ export default async (c: Context): Promise<Response> => {
     return jsonRpcError(null, -32000, "Rate limited");
   }
 
-  const expected = process.env.ALARIC_MCP_TOKEN;
+  const MCP_TOKEN_ENV = "{{MCP_TOKEN_ENV}}";
+  const expected = process.env[MCP_TOKEN_ENV];
   if (!expected) {
-    return jsonRpcError(null, -32002, "ALARIC_MCP_TOKEN not configured in Zo Secrets");
+    return jsonRpcError(null, -32002, `${MCP_TOKEN_ENV} not configured in Zo Secrets`);
   }
-  const customAuth = c.req.header("x-alaric-token") || "";
+  const customAuth = c.req.header("x-mcp-token") || "";
   const bearerAuth = c.req.header("authorization") || "";
   const queryToken = c.req.query("t") || "";
   let token = "";
@@ -910,7 +931,7 @@ export default async (c: Context): Promise<Response> => {
   } else if (queryToken) {
     token = queryToken;
   } else {
-    return jsonRpcError(null, -32001, "Unauthorized (send X-Alaric-Token, Authorization: Bearer, or ?t= query)");
+    return jsonRpcError(null, -32001, "Unauthorized (send X-Mcp-Token, Authorization: Bearer, or ?t= query)");
   }
   if (!constantTimeEqual(token, expected)) {
     return jsonRpcError(null, -32001, "Invalid token");

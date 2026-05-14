@@ -13,9 +13,10 @@ metadata:
   requires:
     - ZO_ASK_TOKEN (required — Zo access token for AI proxy, Settings > Advanced)
     - ZO_API_KEY (required — used by /api/<slug>-mcp to call api.zo.computer/mcp)
-    - ALARIC_MCP_TOKEN (required — shared secret authenticating OpenAI Realtime → /api/<slug>-mcp; opaque identifier, name is stable across forks)
+    - MCP_SHARED_TOKEN (required — shared secret authenticating OpenAI Realtime → /api/<slug>-mcp; env-var name is configurable via deploy flag --mcp-token-secret)
     - OPENAI_API_KEY (required for Realtime mode — GA token mint)
     - ELEVENLABS_API_KEY (optional — for ElevenLabs TTS backend)
+    - MEMORY_DB_PATH (optional — absolute path to SQLite memory backend; default /home/workspace/.zo/memory/shared-facts.db; memory tools degrade gracefully if missing)
 ---
 
 # AI Assistant Voice
@@ -58,7 +59,8 @@ One command deploys everything: the PWA page + all API routes.
 
 ```bash
 # 1. Save required secrets in Settings > Advanced first:
-#    ZO_ASK_TOKEN, ZO_API_KEY, ALARIC_MCP_TOKEN, OPENAI_API_KEY
+#    ZO_ASK_TOKEN, ZO_API_KEY, MCP_SHARED_TOKEN, OPENAI_API_KEY
+#    (rename MCP_SHARED_TOKEN with --mcp-token-secret if you prefer)
 # 2. Run with YOUR assistant name + YOUR persona id:
 bun /home/workspace/Skills/ai-assistant-voice/scripts/deploy-tts-endpoint.ts \
   --deploy-all \
@@ -103,9 +105,10 @@ Add these in [Settings → Advanced → Secrets](/?t=settings&s=advanced):
 |---|---|---|
 | `ZO_ASK_TOKEN` | ✅ Yes | Zo access token — used by `/api/<slug>-ask` + HMAC session-token issuer. |
 | `ZO_API_KEY` | ✅ Yes | Used by `/api/<slug>-mcp` + `/api/<slug>-personas` to call `api.zo.computer/mcp`. |
-| `ALARIC_MCP_TOKEN` | ✅ Yes | Shared secret. Sent by `/api/realtime-session` in the MCP server_url query, validated by `/api/<slug>-mcp`. Generate via `openssl rand -hex 32`. Name is a stable, opaque identifier — keep it `ALARIC_MCP_TOKEN` regardless of your assistant's display name. |
+| `MCP_SHARED_TOKEN` | ✅ Yes | Shared secret. Sent by `/api/realtime-session` in the MCP server_url query, validated by `/api/<slug>-mcp`. Generate via `openssl rand -hex 32`. **Env-var name is configurable** — pass `--mcp-token-secret YOUR_NAME` to the deploy script (e.g. `ARIA_MCP_TOKEN`) and save the secret under that name. |
 | `OPENAI_API_KEY` | For Realtime mode | GPT-Realtime-2 GA token mint |
 | `ELEVENLABS_API_KEY` | If using ElevenLabs TTS | From elevenlabs.io → Profile → API Keys |
+| `MEMORY_DB_PATH` | Optional | Absolute path to a SQLite memory backend (default `/home/workspace/.zo/memory/shared-facts.db`). Powers the `memory_search` + `list_open_loops` tools. Missing file = those tools return "memory not configured"; everything else still works. |
 
 ---
 
@@ -147,7 +150,7 @@ Realtime mode uses **GPT-Realtime-2** with native MCP tool access.
 ### How it works
 
 1. **Connect** → Browser requests ephemeral token + MCP tool config from `/api/realtime-session`
-2. **MCP config** → Session response includes `tools: [{type: "mcp", server_label: "<slug>", server_url: "...?t=<ALARIC_MCP_TOKEN>", allowed_tools, require_approval}]`
+2. **MCP config** → Session response includes `tools: [{type: "mcp", server_label: "<slug>", server_url: "...?t=<shared-secret>", allowed_tools, require_approval}]` (secret read from the env var configured via `--mcp-token-secret`, default `MCP_SHARED_TOKEN`)
 3. **WebRTC** → Browser exchanges SDP with `api.openai.com/v1/realtime/calls`
 4. **Tool discovery** → OpenAI calls `tools/list` on `/api/<slug>-mcp`; emits `mcp_list_tools` event
 5. **Listen & respond** → User speaks; GPT-Realtime-2 calls MCP tools directly when needed
@@ -155,10 +158,10 @@ Realtime mode uses **GPT-Realtime-2** with native MCP tool access.
 
 ### Auth (why the token is in the URL)
 
-The zo.space Cloudflare proxy strips `Authorization: Bearer` headers. OpenAI Realtime's MCP integration only supports `authorization` (which maps to that header). The workaround is a query-param token (`?t=<ALARIC_MCP_TOKEN>`) baked into `server_url`. OpenAI redacts path/query from stored logs.
+The zo.space Cloudflare proxy strips `Authorization: Bearer` headers. OpenAI Realtime's MCP integration only supports `authorization` (which maps to that header). The workaround is a query-param token (`?t=<shared-secret>`) baked into `server_url`. OpenAI redacts path/query from stored logs.
 
 `/api/<slug>-mcp` accepts the token in this order:
-1. `X-Alaric-Token` header (preferred for direct callers)
+1. `X-Mcp-Token` header (preferred for direct callers)
 2. `Authorization: Bearer ...` (works on origins that don't strip it)
 3. `?t=` query (Realtime path)
 
@@ -254,7 +257,8 @@ Configs are saved to `~/.zo/voice/persona-voices.json`:
 | Symptom | Root Cause | Fix |
 |---|---|---|
 | Model never calls tools | MCP server unreachable from OpenAI | Check console for `mcp_list_tools`. Test manually: `curl -X POST 'https://<host>/api/<slug>-mcp?t=<token>' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'` |
-| `Unauthorized` from `/api/<slug>-mcp` | `ALARIC_MCP_TOKEN` missing or wrong | Set the secret; ensure `/api/realtime-session` reads the same env var name |
+| `Unauthorized` from `/api/<slug>-mcp` | MCP shared secret missing or wrong | Verify your token secret is set (default name `MCP_SHARED_TOKEN`, or whatever you passed to `--mcp-token-secret`); both the MCP route and `/api/realtime-session` read `process.env[<that name>]` |
+| `memory_search` returns "memory not configured" | `MEMORY_DB_PATH` points to a missing file (default `/home/workspace/.zo/memory/shared-facts.db`) | Either install a Zo memory backend at the default path, or point `MEMORY_DB_PATH` at your own SQLite DB exposing `facts`/`facts_fts`/`open_loops` tables |
 | `Authorization: Bearer ...` works locally but not from OpenAI | zo.space proxy strips it | Use `?t=` query-param token (the default for v3.0) |
 | Write tool runs without approval | Pack is `essentials` or `power` (no writes), or `require_approval` is `"never"` | Use `power_with_writes` pack and confirm `require_approval` includes `{always: {tool_names: [...]}}` |
 | `"Unknown parameter: 'model'"` | Sending `model` to `/client_secrets` | Bare `POST {}` — config goes in `tools` instead |
@@ -267,3 +271,4 @@ Configs are saved to `~/.zo/voice/persona-voices.json`:
 - **v2.1.0**: Single-model Realtime with `gpt-4o-mini-realtime-preview` via `/v1/realtime/sessions`. Tools pre-configured at token mint time.
 - **v2.2.0**: Multi-model hybrid with `gpt-realtime-2` GA API. Personality + 11 function tools injected via data channel. `/api/<slug>-orchestrator` mediates Zo tool calls.
 - **v3.0.0**: Native MCP. `/api/<slug>-mcp` exposes 36 Zo tools to OpenAI Realtime directly. Orchestrator removed from the hot path. Tool packs + approval gating added. Query-param token auth (zo.space proxy strips `Authorization`).
+- **v3.1.0**: Public-repo hardening. MCP shared-secret env var is configurable (`--mcp-token-secret`, default `MCP_SHARED_TOKEN`). Memory backend is pluggable via `MEMORY_DB_PATH` with graceful degradation. Architecture diagram cleanup. Header rename: `X-Alaric-Token` → `X-Mcp-Token`.
