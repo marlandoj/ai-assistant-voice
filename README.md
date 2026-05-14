@@ -8,7 +8,7 @@ Built as a Progressive Web App (PWA) deployed to your `zo.space`. Works with any
 
 ## Architecture
 
-![Alaric Voice v3.0 architecture](docs/alaric-voice-v3-architecture-3d.png)
+![AI Assistant Voice v3.0 architecture](docs/alaric-voice-v3-architecture.png)
 
 End-to-end flow:
 
@@ -129,7 +129,8 @@ Skills/ai-assistant-voice/
 │   └── setup-edge-tts.sh             # One-time edge-tts install
 ├── pwa/                              # v1 vanilla JS shell (legacy)
 └── docs/
-    └── alaric-voice-v3-architecture-3d.png
+    ├── alaric-voice-v3-architecture.png
+    └── alaric-voice-v3-architecture.svg
 ```
 
 ---
