@@ -428,6 +428,11 @@ export default function AlaricVoicePWA() {
   const wakeFireCooldown = useRef<number>(0);    // suppress repeat wake fires from interimResults
   const sendZoRef = useRef<((text:string)=>Promise<void>)|null>(null);
   const sessionStart = useRef<number>(Date.now());
+  // Latency observability — "every 10ms matters". Marks set at turn/tool start,
+  // deltas logged on first audio + tool completion. Console-only foundation.
+  const turnEndAt = useRef<number>(0);          // when user stopped speaking
+  const firstAudioLogged = useRef<boolean>(false);
+  const toolStartAt = useRef<Record<string, number>>({});
 
   // Inject animations + apply theme to body
   useEffect(() => {
@@ -539,14 +544,20 @@ export default function AlaricVoicePWA() {
       showToast(`Realtime error: ${evt?.error?.message || "unknown"}`,"error",setToast_);
     }
     switch(evt.type){
-      case"input_audio_buffer.speech_started": setIsRecording(true); setRtUserText(""); break;
-      case"input_audio_buffer.speech_stopped": setIsRecording(false); break;
+      case"input_audio_buffer.speech_started": setIsRecording(true); setRtUserText(""); setIsSpeaking(false); break;
+      case"input_audio_buffer.speech_stopped": setIsRecording(false); turnEndAt.current=Date.now(); firstAudioLogged.current=false; break;
       case"conversation.item.input_audio_transcription.delta": setRtUserText(t=>t+(evt.delta||"")); break;
       case"conversation.item.input_audio_transcription.completed":
         if(evt.transcript?.trim()){const tx=evt.transcript.trim();setMessages(m=>[...m,{role:"user",text:tx,time:ts()}]);setRtUserText("");}
         break;
       case"response.content_part.added":
-        if(evt.part?.type==="audio"){setIsSpeaking(true);}
+        if(evt.part?.type==="audio"){
+          setIsSpeaking(true);
+          if(!firstAudioLogged.current && turnEndAt.current){
+            firstAudioLogged.current=true;
+            console.log(`[latency] time-to-first-audio: ${Date.now()-turnEndAt.current}ms`);
+          }
+        }
         break;
       case"response.output_item.added":
         // Show typing indicator while MCP call is in-flight.
@@ -555,6 +566,7 @@ export default function AlaricVoicePWA() {
         // being spoken automatically.
         if (evt.item?.type === "mcp_call") {
           setIsTyping(true);
+          if(evt.item?.id) toolStartAt.current[evt.item.id]=Date.now();
         }
         break;
       case"response.output_item.done":
@@ -562,6 +574,8 @@ export default function AlaricVoicePWA() {
         if(evt.item?.type==="mcp_call"){
           setIsTyping(false);
           const toolName = evt.item?.name || "tool";
+          const startedAt = evt.item?.id ? toolStartAt.current[evt.item.id] : 0;
+          if(startedAt){ console.log(`[latency] tool ${toolName}: ${Date.now()-startedAt}ms`); delete toolStartAt.current[evt.item.id]; }
           const errored = !!evt.item?.error;
           const summary = errored ? `[${toolName}] error: ${evt.item?.error}` : `[${toolName}] ✓`;
           setMessages(m=>[...m,{role:"system",text:summary,time:ts()}]);

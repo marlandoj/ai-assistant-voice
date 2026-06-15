@@ -9,7 +9,7 @@ description: >
 compatibility: Created for Zo Computer
 metadata:
   author: marlandoj.zo.computer
-  version: 3.1.0
+  version: 3.2.0
   requires:
     - ZO_ASK_TOKEN (required — Zo access token for AI proxy, Settings > Advanced)
     - ZO_API_KEY (required — used by /api/<slug>-mcp to call api.zo.computer/mcp)
@@ -272,3 +272,4 @@ Configs are saved to `~/.zo/voice/persona-voices.json`:
 - **v2.2.0**: Multi-model hybrid with `gpt-realtime-2` GA API. Personality + 11 function tools injected via data channel. `/api/<slug>-orchestrator` mediates Zo tool calls.
 - **v3.0.0**: Native MCP. `/api/<slug>-mcp` exposes 36 Zo tools to OpenAI Realtime directly. Orchestrator removed from the hot path. Tool packs + approval gating added. Query-param token auth (zo.space proxy strips `Authorization`).
 - **v3.1.0**: Public-repo hardening. MCP shared-secret env var is configurable (`--mcp-token-secret`, default `MCP_SHARED_TOKEN`). Memory backend is pluggable via `MEMORY_DB_PATH` with graceful degradation. Architecture diagram cleanup. Header rename: `X-Alaric-Token` → `X-Mcp-Token`.
+- **v3.2.0**: Latency & naturalness tunings (from Bhargava/Together AI "Engineering voice agents" talk). Five enhancements in `realtime-session-route.ts` + `pwa-page.tsx`: (1) `audio.input.turn_detection.type = "semantic_vad"` + `gpt-4o-mini-transcribe` streaming input transcription — fixes talk-over and surfaces user turns; (2) barge-in via `interrupt_response` + `create_response`, with PWA resetting speaking state on `speech_started`; (3) thinker-talker back-channel — one brief spoken acknowledgment before known-slow tools only, fast tools stay silent (instruction-layer, no competing `response.create`); (4) `VOICE_DELIVERY_SUFFIX` — pronunciation hints (Zouroboros → "Zoo-ro-boros") + emotion/phone-call delivery appended to `instructions`; (5) latency observability — time-to-first-audio + per-tool-call duration logged in the PWA.

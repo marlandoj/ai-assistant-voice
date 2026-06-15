@@ -163,7 +163,8 @@ function buildToolRoutingSuffix(pack: string): string {
     "Hard rules:",
     "1. NEVER claim you cannot access information — call a tool instead.",
     "2. NEVER say \"I don't have access to your X\" — call the corresponding tool.",
-    "3. Call tools immediately and silently — do NOT announce \"I'll check X\" before calling a tool. Just call it.",
+    "3. For fast tools (calendar, mail, memory, file reads, workspace/web search, lists) call immediately and silently — do NOT announce \"I'll check X\". Just call it.",
+    "3b. For slow tools ONLY (web_research, generate_image, save_webpage, transcribe_audio, transcribe_video, deep research), say ONE brief acknowledgment first (e.g. \"One moment, Sir.\") then call the tool — so the line is never silent during a long call.",
     "4. If one tool returns insufficient information, call another relevant tool in the SAME response. Chain all needed tool calls silently before speaking.",
     "5. After ALL needed tools have returned, deliver the final answer in-character and in the persona's voice. You MUST speak the result — never end a response after a tool call without delivering the spoken answer.",
     "6. If a tool errors or times out, briefly explain what happened.",
@@ -265,6 +266,17 @@ const FALLBACK_INSTRUCTIONS = `You are {{ASSISTANT_NAME}}, a voice AI assistant.
 
 Personality: warm, articulate, helpful. Keep spoken responses to 1-3 short sentences unless the user explicitly asks for detail.`;
 
+// Voice-delivery guidance appended to every session. Persona identity/tone comes
+// from baseInstructions; this governs only spoken delivery — pronunciation the TTS
+// otherwise mangles, plus light emotional register matched to context.
+const VOICE_DELIVERY_SUFFIX = `
+
+Spoken delivery:
+- Pronounce "Zouroboros" as "Zoo-ro-boros" and "Aventurine" as "uh-VEN-chur-een".
+- Say proper names, tickers, and product names clearly; if a name is unusual and the user seems unsure, spell it out.
+- Match emotion to the moment: calm and precise for urgent or technical matters, a touch of warmth and dry wit for casual ones. Never theatrical.
+- Speak as if on a phone call — natural contractions and brief pauses. Do not read punctuation or markdown aloud.`;
+
 // Default voice if no persona-specific mapping is configured at deploy time.
 // Override via --default-voice flag on the deploy script.
 const DEFAULT_VOICE = "{{DEFAULT_VOICE}}";
@@ -328,7 +340,7 @@ export default async (c: Context): Promise<Response> => {
   const baseInstructions = personaPrompt
     ? personaPrompt
     : FALLBACK_INSTRUCTIONS;
-  const instructions = `${baseInstructions}${buildToolRoutingSuffix(requestedPack)}`;
+  const instructions = `${baseInstructions}${buildToolRoutingSuffix(requestedPack)}${VOICE_DELIVERY_SUFFIX}`;
 
   const fallbackVoice = ALLOWED_VOICES.includes(DEFAULT_VOICE) ? DEFAULT_VOICE : "alloy";
   const candidate = ALLOWED_VOICES.includes(requestedVoice) ? requestedVoice : fallbackVoice;
@@ -372,6 +384,20 @@ export default async (c: Context): Promise<Response> => {
         model: "gpt-realtime-2",
         instructions,
         audio: {
+          input: {
+            // gpt-4o-mini-transcribe emits streaming .delta events the PWA
+            // already consumes; whisper-1 only emits .completed.
+            transcription: { model: "gpt-4o-mini-transcribe" },
+            // semantic_vad uses a turn-detection model to tell a mid-thought
+            // pause from an actual end-of-turn — the talk's "still unsolved"
+            // problem. interrupt_response gives full-duplex barge-in: the
+            // model stops speaking the moment the user starts.
+            turn_detection: {
+              type: "semantic_vad",
+              create_response: true,
+              interrupt_response: true,
+            },
+          },
           output: { voice },
         },
         tools: [mcpTool],
