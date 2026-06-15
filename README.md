@@ -109,6 +109,22 @@ Open in Chrome/Safari on mobile → "Add to Home Screen." Launches full-screen w
 
 ---
 
+## v3.2.0 — Latency & naturalness tunings
+
+Five production improvements sourced from Bhargava/Together AI's *"Engineering voice agents"* talk, applied to `realtime-session-route.ts` and `pwa-page.tsx`:
+
+| # | Feature | Effect |
+|---|---------|--------|
+| 1 | **Semantic VAD** | Distinguishes a thinking pause from end-of-turn — stops the model from cutting you off mid-thought |
+| 2 | **Full-duplex barge-in** | Model stops the instant you start speaking — natural interruption, no half-second lag |
+| 3 | **Thinker-talker back-channel** | Silent on fast tool calls; one brief acknowledgment ("One moment.") on slow ones — eliminates dead air without over-narrating |
+| 4 | **Voice delivery suffix** | Pronunciation guidance + emotional register injected into every session — more consistent, expressive tone |
+| 5 | **Latency observability** | `[latency] time-to-first-audio: Xms` + per-tool-call ms logged to console — pinpoint where delays come from |
+
+No config changes needed — redeploy with `deploy-tts-endpoint.ts --deploy-all` to pick up all five.
+
+---
+
 ## TTS backend comparison
 
 | Backend | Voice quality | Cost | API key |
