@@ -847,7 +847,40 @@ async function handlePublishSite(args: any, apiKey: string) {
 // DISPATCHER
 // =========================================================================
 
+// Zo MCP tools that are read-only / idempotent, so re-running one after a
+// transient upstream failure can never double-apply a side effect. Every
+// mutating tool is intentionally ABSENT — writes (send_email, create_agent,
+// write_space_route, generate_image, run_bash_command, …) stay one-shot.
+const RETRYABLE_TOOLS = new Set<string>([
+  "list_open_loops", "memory_search", "list_agents", "list_automations",
+  "list_calendar_events", "read_file", "workspace_search", "web_search",
+  "list_files", "list_personas", "list_user_services", "get_space_errors",
+  "web_research", "find_similar_links", "maps_search", "read_webpage",
+  "image_search", "save_webpage", "service_doctor", "gmail_search", "gmail_read",
+]);
+const RETRY_BACKOFF_MS = 400;
+
+// Only retry genuinely transient upstream failures (gateway/overload/timeout).
+// Application errors, validation failures, and 4xx (other than 429) are not
+// retried — a second identical call would fail the same way.
+function isTransientErrorText(text: string): boolean {
+  return /HTTP (?:429|502|503|504)\b/.test(text) || /Timed out after \d+ms/.test(text);
+}
+
 async function dispatchTool(name: string, args: any, apiKey: string) {
+  const first = await dispatchToolOnce(name, args, apiKey);
+  if (
+    RETRYABLE_TOOLS.has(name) &&
+    first?.isError &&
+    isTransientErrorText(first.content?.[0]?.text ?? "")
+  ) {
+    await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+    return await dispatchToolOnce(name, args, apiKey);
+  }
+  return first;
+}
+
+async function dispatchToolOnce(name: string, args: any, apiKey: string) {
   switch (name) {
     case "list_open_loops": return await handleListOpenLoops(args, apiKey);
     case "memory_search": return await handleMemorySearch(args, apiKey);

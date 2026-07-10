@@ -433,6 +433,13 @@ export default function AlaricVoicePWA() {
   const turnEndAt = useRef<number>(0);          // when user stopped speaking
   const firstAudioLogged = useRef<boolean>(false);
   const toolStartAt = useRef<Record<string, number>>({});
+  // Auto-reconnect on a dropped realtime session. userDisconnected suppresses
+  // reconnect when the user/app intentionally hangs up; rtReconnectTimer makes
+  // the reconnect single-flight; connectRtRef holds the latest connectRealtime
+  // so the stable onconnectionstatechange handler always calls the current one.
+  const userDisconnected = useRef<boolean>(false);
+  const rtReconnectTimer = useRef<any>(null);
+  const connectRtRef = useRef<null | (() => void)>(null);
 
   // Inject animations + apply theme to body
   useEffect(() => {
@@ -634,6 +641,7 @@ export default function AlaricVoicePWA() {
   const connectRealtime = useCallback(async()=>{
     if(rtConnected||rtConnecting) return;
     setRtConnecting(true);
+    userDisconnected.current=false;
     const MAX_RETRIES = 3;
     let lastErr = "";
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -654,6 +662,12 @@ export default function AlaricVoicePWA() {
         const stream=await navigator.mediaDevices.getUserMedia({audio:true});
         localStream.current=stream;
         const pc=new RTCPeerConnection(); pcRef.current=pc;
+        pc.onconnectionstatechange=()=>{
+          const st=pc.connectionState;
+          if(pcRef.current!==pc||userDisconnected.current) return; // superseded or intentional
+          if(st==="failed") scheduleRtReconnect(pc,0);             // terminal — reconnect now
+          else if(st==="disconnected") scheduleRtReconnect(pc,2500); // may self-heal — grace first
+        };
         const audio=new Audio(); audio.autoplay=true; audioRef.current=audio;
         pc.ontrack=(e)=>{audio.srcObject=e.streams[0];};
         pc.addTrack(stream.getTracks()[0]);
@@ -693,7 +707,30 @@ export default function AlaricVoicePWA() {
     showToast(`Connect failed after ${MAX_RETRIES} attempts: ${lastErr}`, "error", setToast_);
   },[personaId,rtConnected,rtConnecting,handleRtEvent]);
 
+  useEffect(()=>{connectRtRef.current=connectRealtime;},[connectRealtime]);
+
+  // One bounded auto-reconnect after a dropped realtime session. Single-flight
+  // via rtReconnectTimer; re-checks liveness after the delay so a self-healed
+  // "disconnected" never triggers a needless reconnect. An intentional hang-up
+  // (disconnectRealtime) clears the pending timer, so it always wins the race.
+  function scheduleRtReconnect(pc: RTCPeerConnection, delay: number){
+    if(rtReconnectTimer.current) return;
+    rtReconnectTimer.current=setTimeout(()=>{
+      rtReconnectTimer.current=null;
+      if(pcRef.current!==pc||userDisconnected.current) return;
+      if(pc.connectionState==="connected") return; // recovered on its own
+      showToast("Connection dropped — reconnecting…","warn",setToast_);
+      disconnectRealtime();
+      rtReconnectTimer.current=setTimeout(()=>{
+        rtReconnectTimer.current=null;
+        connectRtRef.current?.();
+      },600);
+    },delay);
+  }
+
   function disconnectRealtime(){
+    userDisconnected.current=true;
+    if(rtReconnectTimer.current){clearTimeout(rtReconnectTimer.current);rtReconnectTimer.current=null;}
     if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
     wakeGatedMuted.current=false;
     if(dcRef.current){try{dcRef.current.close();}catch{}dcRef.current=null;}
