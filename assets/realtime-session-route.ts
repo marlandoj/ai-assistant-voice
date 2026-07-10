@@ -380,7 +380,7 @@ export default async (c: Context): Promise<Response> => {
     body: JSON.stringify({
       session: {
         type: "realtime",
-        model: "gpt-realtime-2",
+        model: "gpt-realtime-2.1",
         instructions,
         audio: {
           input: {

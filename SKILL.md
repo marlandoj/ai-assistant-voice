@@ -45,7 +45,7 @@ This skill implements a **native MCP pipeline** with OpenAI Realtime GA:
 
 | Layer | Path | Purpose |
 |---|---|---|
-| **Audio** | `gpt-realtime-2` via WebRTC | Native speech→speech, ~300ms latency |
+| **Audio** | `gpt-realtime-2.1` via WebRTC | Native speech→speech, ~300ms latency |
 | **MCP server** | `/api/<slug>-mcp` on zo.space | JSON-RPC 2.0 endpoint exposing Zo tools to OpenAI |
 | **Tool backend** | `https://api.zo.computer/mcp` | Upstream Zo tool execution |
 
