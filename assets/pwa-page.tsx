@@ -8,7 +8,7 @@ const ZO_SPACE = "{{ZO_HOST}}";
 const TTS_ENDPOINT = `${ZO_SPACE}/api/tts`;
 const ASK_ENDPOINT = `${ZO_SPACE}/api/{{ASSISTANT_SLUG}}-ask`;
 const RT_SESSION = `${ZO_SPACE}/api/realtime-session`;
-const RT_MODEL = "gpt-realtime-2";
+const RT_MODEL = "gpt-realtime-2.1";
 const PERSONAS_ENDPOINT = `${ZO_SPACE}/api/{{ASSISTANT_SLUG}}-personas`;
 const BOOTSTRAP_ENDPOINT = `${ZO_SPACE}/api/{{ASSISTANT_SLUG}}-bootstrap`;
 
@@ -646,6 +646,11 @@ export default function AlaricVoicePWA() {
         const session=await sesResp.json();
         const token=session.value;
         if(!token) throw new Error("No ephemeral token");
+        // Derive the model from the minted token so the SDP call always
+        // matches what the server session was created for — never hard-code,
+        // or a server-only model bump breaks the handshake with
+        // "Model X does not match the realtime token model."
+        const rtModel=session?.session?.model||RT_MODEL;
         const stream=await navigator.mediaDevices.getUserMedia({audio:true});
         localStream.current=stream;
         const pc=new RTCPeerConnection(); pcRef.current=pc;
@@ -661,7 +666,7 @@ export default function AlaricVoicePWA() {
           showToast("Realtime connected — just start talking!","success",setToast_);
         };
         const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
-        const sdpResp=await fetch(`https://api.openai.com/v1/realtime/calls?model=${RT_MODEL}`,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/sdp"},body:offer.sdp});
+        const sdpResp=await fetch(`https://api.openai.com/v1/realtime/calls?model=${rtModel}`,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/sdp"},body:offer.sdp});
         if(!sdpResp.ok) {
           const body = await sdpResp.text().catch(()=>"");
           let detail = `OpenAI SDP error ${sdpResp.status}`;
