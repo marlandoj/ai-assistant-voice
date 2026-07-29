@@ -1,4 +1,4 @@
-# AI Assistant Voice
+# Zo Voice AI Assistant
 
 ![Zo Voice AI Assistant](docs/hero-banner.png)
 
