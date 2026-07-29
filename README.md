@@ -10,15 +10,16 @@ Built as a Progressive Web App (PWA) deployed to your `zo.space`. Works with any
 
 ## Architecture
 
-![AI Assistant Voice v3.0 architecture](docs/alaric-voice-v3-architecture.png)
+![How AI Assistant Voice turns a conversation into a helpful action](docs/alaric-voice-v3-architecture.png)
 
-End-to-end flow (`<slug>` is the lowercased `--name` flag, default `voice`):
+At a glance:
 
-1. **Bootstrap** — PWA POSTs to `/api/<slug>-bootstrap`; gets a 24h HMAC session token (`v1.exp.nonce.sig`) signed with `ZO_ASK_TOKEN`.
-2. **Mint session** — PWA POSTs to `/api/realtime-session` with the token + tool pack choice. Server mints an ephemeral OpenAI client secret and attaches the MCP tool config (`server_url`, `allowed_tools`, `require_approval`).
-3. **WebRTC** — PWA opens a Realtime WebRTC session with OpenAI using the ephemeral key. Voice in/out streams over the data channel.
-4. **MCP tool calls** — OpenAI Realtime backend hits `/api/<slug>-mcp?t=<shared-secret>` directly (no browser hop). The MCP server dispatches to handlers, which call `api.zo.computer/mcp` upstream with `Bearer ZO_API_KEY`. The env-var name holding the shared secret is configurable (default `MCP_SHARED_TOKEN`).
-5. **Personas** — `/api/<slug>-personas` calls the upstream `list_personas` MCP tool at request time and returns **your own** persona catalog (no hardcoded list — works for any Zo handle). HMAC-authed, 5-min ETag cache.
+1. **Speak naturally** using your microphone.
+2. **Your assistant listens and responds** in real time.
+3. **Zo tools help when needed** with memory, calendars, email, and files.
+4. **You hear the answer or receive the completed task.** Changes require your approval.
+
+The technical routes and tool packs are documented below for readers who need implementation details.
 
 ### Tool packs
 
