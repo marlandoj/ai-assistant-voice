@@ -25,7 +25,7 @@
 //   3. ?t= query param (Realtime path)
 
 import type { Context } from "hono";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 
 const ZO_MCP_ENDPOINT = "https://api.zo.computer/mcp";
@@ -76,10 +76,17 @@ function constantTimeEqual(a: string, b: string): boolean {
 
 type JsonRpcId = string | number | null;
 
-function jsonRpcOk(id: JsonRpcId, result: unknown): Response {
+const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
+
+function jsonRpcOk(id: JsonRpcId, result: unknown, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify({ jsonrpc: "2.0", id, result }), {
     status: 200,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      ...(extraHeaders || {}),
+    },
   });
 }
 
@@ -105,48 +112,63 @@ async function callZoMcp(
   apiKey: string,
   timeoutMs = 15_000,
 ): Promise<{ ok: true; text: string } | { ok: false; error: string; isTimeout?: boolean }> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const resp = await fetch(ZO_MCP_ENDPOINT, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "tools/call",
-        id: Date.now(),
-        params: { name, arguments: args },
-      }),
-      signal: ac.signal,
-    });
-    clearTimeout(timer);
-    const raw = await resp.text();
-    if (!resp.ok) return { ok: false, error: `Zo MCP HTTP ${resp.status}: ${raw.slice(0, 300)}` };
-    let parsed: any;
+  async function attempt(candidate: string) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return { ok: false, error: `Zo MCP non-JSON: ${raw.slice(0, 300)}` };
+      const resp = await fetch(ZO_MCP_ENDPOINT, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${candidate}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "tools/call",
+          id: Date.now(),
+          params: { name, arguments: args },
+        }),
+        signal: ac.signal,
+      });
+      clearTimeout(timer);
+      const raw = await resp.text();
+      if (!resp.ok) return { ok: false as const, error: `Zo MCP HTTP ${resp.status}: ${raw.slice(0, 300)}` };
+      let parsed: any;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return { ok: false as const, error: `Zo MCP non-JSON: ${raw.slice(0, 300)}` };
+      }
+      if (parsed?.error) {
+        return {
+          ok: false as const,
+          error: `Zo MCP error: ${JSON.stringify(parsed.error).slice(0, 300)}`,
+          authFailed: parsed.error.code === -32001,
+        };
+      }
+      const content = parsed?.result?.content;
+      const text =
+        Array.isArray(content) && content[0]?.text
+          ? String(content[0].text)
+          : JSON.stringify(parsed?.result ?? parsed);
+      if (parsed?.result?.isError) return { ok: false as const, error: text.slice(0, 600) };
+      return { ok: true as const, text };
+    } catch (err: any) {
+      clearTimeout(timer);
+      return {
+        ok: false as const,
+        error: err?.name === "AbortError" ? `Timed out after ${timeoutMs}ms` : err?.message || "Unknown error",
+        isTimeout: err?.name === "AbortError",
+      };
     }
-    if (parsed?.error) return { ok: false, error: `Zo MCP error: ${JSON.stringify(parsed.error).slice(0, 300)}` };
-    const content = parsed?.result?.content;
-    const text =
-      Array.isArray(content) && content[0]?.text
-        ? String(content[0].text)
-        : JSON.stringify(parsed?.result ?? parsed);
-    if (parsed?.result?.isError) return { ok: false, error: text.slice(0, 600) };
-    return { ok: true, text };
-  } catch (err: any) {
-    clearTimeout(timer);
-    return {
-      ok: false,
-      error: err?.name === "AbortError" ? `Timed out after ${timeoutMs}ms` : err?.message || "Unknown error",
-      isTimeout: err?.name === "AbortError",
-    };
   }
+
+  const primary = await attempt(apiKey);
+  const fallback = process.env.ZO_ASK_TOKEN;
+  if (!primary.ok && "authFailed" in primary && primary.authFailed && fallback && fallback !== apiKey) {
+    return attempt(fallback);
+  }
+  return primary;
 }
 
 // =========================================================================
@@ -274,8 +296,13 @@ const TOOL_DEFINITIONS: Array<{
   },
   {
     name: "list_personas",
-    description: "List the user's available Zo personas.",
-    inputSchema: { type: "object", properties: {} },
+    description: "List the user's available Zo personas. Pass query to return a focused match instead of the truncated full fleet.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Optional persona name or keyword to focus the result." },
+      },
+    },
   },
   {
     name: "list_user_services",
@@ -549,7 +576,7 @@ async function handleListOpenLoops(args: any, apiKey: string) {
   const where = requested === "all" ? "" : `WHERE status='${requested}'`;
   const sql = `SELECT id || '|' || title || '|' || kind || '|' || priority FROM open_loops ${where} ORDER BY priority DESC, updated_at DESC LIMIT ${limit};`;
   const cmd = `sqlite3 ${MEMORY_DB_PATH} "${sql.replace(/"/g, '\\"')}"`;
-  const r = await callZoMcp("run_bash_command", { cmd }, apiKey, 10_000);
+  const r = await callZoMcp("bash", { cmd }, apiKey, 10_000);
   if (!r.ok) return toolResult(r.error, true);
   const m = r.text.match(/stdout='([\s\S]*?)', stderr=/);
   const stdout = m ? m[1].replace(/\\n/g, "\n") : r.text;
@@ -579,7 +606,7 @@ async function handleMemorySearch(args: any, apiKey: string) {
   const personaFilter = safeScope === "any" ? "" : `AND f.persona = '${safeScope}'`;
   const sql = `SELECT f.entity || '.' || COALESCE(f.key,'') || '|' || substr(f.value,1,200) || '|' || f.decay_class || '|' || COALESCE(f.persona,'shared') FROM facts_fts ft JOIN facts f ON f.rowid=ft.rowid WHERE facts_fts MATCH '${query}' ${personaFilter} ORDER BY rank LIMIT ${limit};`;
   const cmd = `sqlite3 ${MEMORY_DB_PATH} "${sql.replace(/"/g, '\\"')}"`;
-  const r = await callZoMcp("run_bash_command", { cmd }, apiKey, 10_000);
+  const r = await callZoMcp("bash", { cmd }, apiKey, 10_000);
   if (!r.ok) return toolResult(r.error, true);
   const m = r.text.match(/stdout='([\s\S]*?)', stderr=/);
   const stdout = m ? m[1].replace(/\\n/g, "\n") : r.text;
@@ -606,7 +633,7 @@ async function handleReadFile(args: any, apiKey: string) {
   }
   const r = await callZoMcp(
     "read_file",
-    { target_file: target, text_start_line_1_indexed: 1, text_end_line_1_indexed_inclusive: 200 },
+    { target_file: target, start_line: 1, end_line: 200 },
     apiKey,
     15_000,
   );
@@ -626,7 +653,7 @@ async function handleListFiles(args: any, apiKey: string) {
   if (!target.startsWith("/home/workspace/") || target.includes("..") || target.includes("\0")) {
     return toolResult("Only /home/workspace/ paths allowed.", true);
   }
-  const r = await callZoMcp("list_files", { path: target }, apiKey, 10_000);
+  const r = await callZoMcp("list_directory", { path: target }, apiKey, 10_000);
   return r.ok ? toolResult(r.text) : toolResult(r.error, true);
 }
 
@@ -637,13 +664,23 @@ async function passthrough(name: string, args: Record<string, unknown>, apiKey: 
 
 async function handleListAgents(_a: any, k: string) { return passthrough("list_agents", {}, k); }
 async function handleListAutomations(_a: any, k: string) { return passthrough("list_automations", {}, k); }
-async function handleListPersonas(_a: any, k: string) { return passthrough("list_personas", {}, k); }
+async function handleListPersonas(a: any, k: string) {
+  const r = await callZoMcp("list_personas", {}, k, 9_000);
+  if (!r.ok) return toolResult(r.error, true);
+  const query = String(a?.query || "").trim().slice(0, 120);
+  if (!query) return toolResult(r.text);
+  const index = r.text.toLowerCase().indexOf(query.toLowerCase());
+  if (index < 0) return toolResult(`No persona matched "${query}".`);
+  const start = Math.max(0, index - 800);
+  const end = Math.min(r.text.length, index + query.length + 1600);
+  return toolResult(`Persona match for "${query}":\n${r.text.slice(start, end)}`);
+}
 async function handleListUserServices(_a: any, k: string) { return passthrough("list_user_services", {}, k); }
 async function handleGetSpaceErrors(_a: any, k: string) { return passthrough("get_space_errors", {}, k); }
 async function handleServiceDoctor(a: any, k: string) {
   const id = String(a?.service_id || "").trim();
   if (!id) return toolResult("missing service_id", true);
-  return passthrough("service_doctor", { service_id: id }, k, 30_000);
+  return passthrough("service_doctor", { service: id }, k, 30_000);
 }
 async function handleSetActivePersona(a: any, k: string) {
   const id = String(a?.persona_id || "").trim();
@@ -745,7 +782,7 @@ async function handleImageSearch(args: any, apiKey: string) {
 async function handleGenerateImage(args: any, apiKey: string) {
   const prompt = String(args?.prompt || "").trim();
   if (!prompt) return toolResult("missing prompt", true);
-  return passthrough("generate_image", { prompt }, apiKey, 60_000);
+  return passthrough("generate_image", { prompt, file_stem: `alaric-voice-${Date.now()}` }, apiKey, 60_000);
 }
 
 async function handleTranscribeAudio(args: any, apiKey: string) {
@@ -753,7 +790,7 @@ async function handleTranscribeAudio(args: any, apiKey: string) {
   if (!target.startsWith("/home/workspace/") || target.includes("..") || target.includes("\0")) {
     return toolResult("Only /home/workspace/ paths allowed.", true);
   }
-  return passthrough("transcribe_audio", { path: target }, apiKey, 120_000);
+  return passthrough("transcribe_audio", { audio_file_path: target }, apiKey, 120_000);
 }
 
 async function handleTranscribeVideo(args: any, apiKey: string) {
@@ -761,7 +798,7 @@ async function handleTranscribeVideo(args: any, apiKey: string) {
   if (!target.startsWith("/home/workspace/") || target.includes("..") || target.includes("\0")) {
     return toolResult("Only /home/workspace/ paths allowed.", true);
   }
-  return passthrough("transcribe_video", { path: target }, apiKey, 180_000);
+  return passthrough("transcribe_video", { video_file_path: target }, apiKey, 180_000);
 }
 
 async function handleGmailSearch(args: any, apiKey: string) {
@@ -770,7 +807,7 @@ async function handleGmailSearch(args: any, apiKey: string) {
   const max_results = Math.min(parseInt(args?.max_results ?? "10", 10) || 10, 20);
   return passthrough(
     "use_app_gmail",
-    { tool_name: "gmail-search-email", configured_props: { q: query, maxResults: max_results } },
+    { tool_name: "gmail-find-email", configured_props: { q: query, maxResults: max_results, fields: ["subject", "sender", "date"] } },
     apiKey,
     20_000,
   );
@@ -781,7 +818,7 @@ async function handleGmailRead(args: any, apiKey: string) {
   if (!id) return toolResult("missing message_id", true);
   return passthrough(
     "use_app_gmail",
-    { tool_name: "gmail-read-email", configured_props: { messageId: id } },
+    { tool_name: "gmail-get-message", configured_props: { messageId: id } },
     apiKey,
     20_000,
   );
@@ -792,14 +829,14 @@ async function handleCreateAgent(args: any, apiKey: string) {
   const instructions = String(args?.instructions || "").trim();
   const rrule = String(args?.rrule || "").trim();
   if (!name || !instructions || !rrule) return toolResult("name, instructions, rrule all required", true);
-  return passthrough("create_agent", { name, instructions, rrule }, apiKey, 30_000);
+  return passthrough("create_agent", { instruction: `${name}\n\n${instructions}`, rrule, model: "byok:461d8d6f-9616-4391-960e-3caea2a27829" }, apiKey, 30_000);
 }
 
 async function handleEditAgent(args: any, apiKey: string) {
   const agent_id = String(args?.agent_id || "").trim();
   if (!agent_id) return toolResult("missing agent_id", true);
-  const params: Record<string, unknown> = { agent_id };
-  if (args?.instructions) params.instructions = String(args.instructions);
+  const params: Record<string, unknown> = { automation_id: agent_id };
+  if (args?.instructions) params.instruction = String(args.instructions);
   return passthrough("edit_agent", params, apiKey, 30_000);
 }
 
@@ -808,14 +845,14 @@ async function handleCreateAutomation(args: any, apiKey: string) {
   const prompt = String(args?.prompt || "").trim();
   const rrule = String(args?.rrule || "").trim();
   if (!name || !prompt || !rrule) return toolResult("name, prompt, rrule all required", true);
-  return passthrough("create_automation", { name, prompt, rrule }, apiKey, 30_000);
+  return passthrough("create_automation", { instruction: `${name}\n\n${prompt}`, rrule, model: "byok:461d8d6f-9616-4391-960e-3caea2a27829" }, apiKey, 30_000);
 }
 
 async function handleEditAutomation(args: any, apiKey: string) {
   const automation_id = String(args?.automation_id || "").trim();
   if (!automation_id) return toolResult("missing automation_id", true);
   const params: Record<string, unknown> = { automation_id };
-  if (args?.prompt) params.prompt = String(args.prompt);
+  if (args?.prompt) params.instruction = String(args.prompt);
   return passthrough("edit_automation", params, apiKey, 30_000);
 }
 
@@ -850,7 +887,7 @@ async function handlePublishSite(args: any, apiKey: string) {
 // Zo MCP tools that are read-only / idempotent, so re-running one after a
 // transient upstream failure can never double-apply a side effect. Every
 // mutating tool is intentionally ABSENT — writes (send_email, create_agent,
-// write_space_route, generate_image, run_bash_command, …) stay one-shot.
+// write_space_route, generate_image, bash, …) stay one-shot.
 const RETRYABLE_TOOLS = new Set<string>([
   "list_open_loops", "memory_search", "list_agents", "list_automations",
   "list_calendar_events", "read_file", "workspace_search", "web_search",
@@ -932,15 +969,31 @@ export default async (c: Context): Promise<Response> => {
       status: 204,
       headers: {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+        "Access-Control-Allow-Headers":
+          "Content-Type, Authorization, X-Mcp-Token, Mcp-Session-Id, Mcp-Protocol-Version, MCP-Protocol-Version, Accept",
+        "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version",
         "Access-Control-Max-Age": "86400",
       },
     });
   }
 
+  if (c.req.method === "GET") {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: {
+        Allow: "POST, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
   if (c.req.method !== "POST") {
-    return jsonRpcError(null, -32600, "Method not allowed (HTTP)");
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: { Allow: "POST, OPTIONS", "Access-Control-Allow-Origin": "*" },
+    });
   }
 
   const ip = getClientIp(c);
@@ -982,11 +1035,22 @@ export default async (c: Context): Promise<Response> => {
   const params = body?.params || {};
 
   if (method === "initialize") {
-    return jsonRpcOk(id, {
-      protocolVersion: "2024-11-05",
-      capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "alaric-mcp", version: "1.0.0" },
-    });
+    const requestedVersion = String((params as any)?.protocolVersion || "");
+    const negotiatedVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion)
+      ? requestedVersion
+      : DEFAULT_PROTOCOL_VERSION;
+    return jsonRpcOk(
+      id,
+      {
+        protocolVersion: negotiatedVersion,
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: "alaric-mcp", version: "1.1.0" },
+      },
+      {
+        "Mcp-Session-Id": randomUUID(),
+        "MCP-Protocol-Version": negotiatedVersion,
+      },
+    );
   }
 
   if (method === "notifications/initialized") {
@@ -1003,7 +1067,7 @@ export default async (c: Context): Promise<Response> => {
     const apiKey = process.env.ZO_API_KEY;
     if (!apiKey) return jsonRpcOk(id, toolResult("ZO_API_KEY not configured", true));
     try {
-      const REALTIME_HARD_CAP_MS = 10_000;
+      const REALTIME_HARD_CAP_MS = toolName === "list_personas" ? 20_000 : 10_000;
       const result = await Promise.race([
         dispatchTool(toolName, toolArgs, apiKey),
         new Promise<ReturnType<typeof toolResult>>((resolve) =>

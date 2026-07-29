@@ -24,8 +24,8 @@ End-to-end flow (`<slug>` is the lowercased `--name` flag, default `voice`):
 
 | Pack | Tools | `require_approval` |
 |------|-------|--------------------|
-| `essentials` | 19 — memory, calendar read, email/SMS send, file read, web search | `never` |
-| `power` | 28 — adds image search/gen, transcription, Gmail, calendar create | `never` |
+| `essentials` | 19 — memory, calendar read, email/SMS send, file read, web search | per-tool: email/SMS writes `always`, reads `never` |
+| `power` | 28 — adds image search/gen, transcription, Gmail, calendar create | per-tool: writes `always`, reads `never` |
 | `power_with_writes` | 36 — adds agent/automation/route writes, persona switch, publish | per-tool: writes `always`, reads `never` |
 
 ---

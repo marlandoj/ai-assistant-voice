@@ -105,7 +105,7 @@ async function getDeviceKey(): Promise<CryptoKey> {
     const stored = localStorage.getItem(DEVICE_KEY_LS);
     if (stored) {
       const raw = b64decode(stored);
-      return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+      return crypto.subtle.importKey("raw", new Uint8Array(raw).buffer, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
     }
     const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
     const exported = await crypto.subtle.exportKey("raw", key);
@@ -440,6 +440,9 @@ export default function AlaricVoicePWA() {
   const userDisconnected = useRef<boolean>(false);
   const rtReconnectTimer = useRef<any>(null);
   const connectRtRef = useRef<null | (() => void)>(null);
+  const rtDataOpen = useRef(false);
+  const rtCatalogReady = useRef(false);
+  const rtMcpReadyTimer = useRef<any>(null);
 
   // Inject animations + apply theme to body
   useEffect(() => {
@@ -543,8 +546,57 @@ export default function AlaricVoicePWA() {
     if (evt.type === "session.updated" || evt.type === "session.created") {
       console.log("[realtime]", evt.type, "instructions_len:", evt?.session?.instructions?.length, "tools:", evt?.session?.tools?.map((t:any)=>t.name||t.server_label));
     }
-    if (evt.type === "mcp_list_tools") {
-      console.log("[realtime] mcp_list_tools", evt?.server_label, "tools:", (evt?.tools||[]).map((t:any)=>t.name));
+    const mcpListItem = evt?.item?.type === "mcp_list_tools" ? evt.item : null;
+    const mcpTools = evt.type === "mcp_list_tools" ? evt.tools : mcpListItem?.tools;
+    const mcpCatalogReady = evt.type === "mcp_list_tools" || evt.type === "mcp_list_tools.completed" || (evt.type === "conversation.item.done" && !!mcpListItem);
+    if (Array.isArray(mcpTools)) {
+      console.log("[realtime] mcp_list_tools", evt?.server_label || mcpListItem?.server_label, "tools:", mcpTools.map((tool:any)=>tool.name));
+    }
+    if (mcpCatalogReady) {
+      rtCatalogReady.current = true;
+      if (rtMcpReadyTimer.current) { clearTimeout(rtMcpReadyTimer.current); rtMcpReadyTimer.current = null; }
+      const track = localStream.current?.getAudioTracks()[0];
+      if (track) { track.enabled = true; setRtMuted(false); }
+      setRtConnected(true);
+      setRtConnecting(false);
+      showToast("Realtime connected — just start talking!","success",setToast_);
+    }
+    const approvalItem = evt.type === "conversation.item.done" && evt?.item?.type === "mcp_approval_request"
+      ? evt.item
+      : null;
+    if (approvalItem) {
+      const toolName = String(approvalItem.name || "unknown tool");
+      const toolArguments = typeof approvalItem.arguments === "string"
+        ? approvalItem.arguments
+        : JSON.stringify(approvalItem.arguments ?? {}, null, 2);
+      const approved = window.confirm(
+        `Allow Alaric to run ${toolName} with these arguments?\n\n${toolArguments}`,
+      );
+      const channel = dcRef.current;
+      if (channel?.readyState === "open") {
+        channel.send(JSON.stringify({
+          type: "conversation.item.create",
+          item: {
+            type: "mcp_approval_response",
+            approval_request_id: approvalItem.id,
+            approve: approved,
+            reason: approved ? "Approved by the user." : "Rejected by the user.",
+          },
+        }));
+      }
+      setMessages((messages) => [
+        ...messages,
+        {
+          role: "system",
+          text: approved ? `[${toolName}] approved` : `[${toolName}] rejected`,
+          time: ts(),
+        },
+      ]);
+      showToast(
+        approved ? `${toolName} approved.` : `${toolName} rejected.`,
+        approved ? "success" : "info",
+        setToast_,
+      );
     }
     if (evt.type === "error") {
       console.error("[realtime] error event:", evt);
@@ -661,6 +713,10 @@ export default function AlaricVoicePWA() {
         const rtModel=session?.session?.model||RT_MODEL;
         const stream=await navigator.mediaDevices.getUserMedia({audio:true});
         localStream.current=stream;
+        const inputTrack=stream.getAudioTracks()[0];
+        if(inputTrack){inputTrack.enabled=false;setRtMuted(true);}
+        rtDataOpen.current=false;
+        rtCatalogReady.current=false;
         const pc=new RTCPeerConnection(); pcRef.current=pc;
         pc.onconnectionstatechange=()=>{
           const st=pc.connectionState;
@@ -675,9 +731,14 @@ export default function AlaricVoicePWA() {
         dc.onmessage=handleRtEvent;
         dc.onerror=(e)=>{ console.error("[realtime] dc error", e); };
         dc.onopen=()=>{
-          setRtConnected(true);
-          setRtConnecting(false);
-          showToast("Realtime connected — just start talking!","success",setToast_);
+          rtDataOpen.current=true;
+          showToast("Realtime connected — loading tools…","info",setToast_);
+          if(rtMcpReadyTimer.current) clearTimeout(rtMcpReadyTimer.current);
+          rtMcpReadyTimer.current=setTimeout(()=>{
+            if(rtCatalogReady.current) return;
+            showToast("Realtime tool catalog timed out. Please reconnect.","error",setToast_);
+            disconnectRealtime();
+          },15000);
         };
         const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
         const sdpResp=await fetch(`https://api.openai.com/v1/realtime/calls?model=${rtModel}`,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/sdp"},body:offer.sdp});
@@ -732,6 +793,9 @@ export default function AlaricVoicePWA() {
     userDisconnected.current=true;
     if(rtReconnectTimer.current){clearTimeout(rtReconnectTimer.current);rtReconnectTimer.current=null;}
     if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
+    if(rtMcpReadyTimer.current){clearTimeout(rtMcpReadyTimer.current);rtMcpReadyTimer.current=null;}
+    rtDataOpen.current=false;
+    rtCatalogReady.current=false;
     wakeGatedMuted.current=false;
     if(dcRef.current){try{dcRef.current.close();}catch{}dcRef.current=null;}
     if(pcRef.current){try{pcRef.current.close();}catch{}pcRef.current=null;}
