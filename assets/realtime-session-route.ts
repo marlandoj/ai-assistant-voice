@@ -183,31 +183,36 @@ const personaCache: { records: Map<string, PersonaRecord>; fetchedAt: number; pe
 };
 const PERSONA_CACHE_TTL_MS = 60 * 60 * 1000;
 
-async function refreshPersonaCache(apiKey: string): Promise<void> {
+async function refreshPersonaCache(apiKeys: string[]): Promise<void> {
   if (personaCache.pending) return personaCache.pending;
   const now = Date.now();
   if (personaCache.records.size > 0 && now - personaCache.fetchedAt < PERSONA_CACHE_TTL_MS) return;
   const fetchPromise = (async () => {
     try {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 30_000);
-      const resp = await fetch("https://api.zo.computer/mcp", {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/call",
-          id: Date.now(),
-          params: { name: "list_personas", arguments: {} },
-        }),
-        signal: ac.signal,
-      });
-      clearTimeout(timer);
-      if (!resp.ok) {
-        personaCache.lastError = `http_${resp.status}`;
-        return;
+      let parsed: any = null;
+      for (const apiKey of apiKeys) {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 30_000);
+        const resp = await fetch("https://api.zo.computer/mcp", {
+          method: "POST",
+          headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "tools/call",
+            id: Date.now(),
+            params: { name: "list_personas", arguments: {} },
+          }),
+          signal: ac.signal,
+        });
+        clearTimeout(timer);
+        if (!resp.ok) {
+          personaCache.lastError = `http_${resp.status}`;
+          continue;
+        }
+        parsed = await resp.json();
+        if (parsed?.error?.code !== -32001) break;
+        personaCache.lastError = `auth_${parsed.error.code}`;
       }
-      const parsed: any = await resp.json();
       const text = parsed?.result?.content?.[0]?.text;
       if (typeof text !== "string") {
         const sample = JSON.stringify(parsed).slice(0, 400);
@@ -320,7 +325,7 @@ export default async (c: Context): Promise<Response> => {
   if (!apiKey) {
     return jsonError({ error: "openai_unconfigured" }, 503, cors);
   }
-  const zoApiKey = process.env.ZO_API_KEY;
+  const zoApiKeys = [...new Set([process.env.ZO_API_KEY, zoToken].filter((value): value is string => !!value))];
 
   let body: any = {};
   try { body = await c.req.json(); } catch { /* allow empty */ }
@@ -331,7 +336,7 @@ export default async (c: Context): Promise<Response> => {
     : (DEFAULT_PERSONA_ID || "");
   const requestedPack = typeof body?.pack === "string" && TOOL_PACKS[body.pack] ? body.pack : "essentials";
 
-  if (zoApiKey) await refreshPersonaCache(zoApiKey).catch(() => {});
+  await refreshPersonaCache(zoApiKeys).catch(() => {});
 
   const persona = resolvePersona(requestedPersonaId);
   const personaPrompt = persona?.prompt?.trim() || "";
@@ -353,15 +358,14 @@ export default async (c: Context): Promise<Response> => {
   const mcpUrl = `{{ZO_HOST}}/api/{{ASSISTANT_SLUG}}-mcp?t=${encodeURIComponent(mcpToken)}`;
   const allowedTools = TOOL_PACKS[requestedPack];
 
-  let requireApproval: unknown = "never";
-  if (requestedPack === "power_with_writes") {
-    const writeTools = allowedTools.filter((t) => APPROVAL_REQUIRED_TOOLS.has(t));
-    const safeTools = allowedTools.filter((t) => !APPROVAL_REQUIRED_TOOLS.has(t));
-    requireApproval = {
-      always: { tool_names: writeTools },
-      never: { tool_names: safeTools },
-    };
-  }
+  const writeTools = allowedTools.filter((tool) => APPROVAL_REQUIRED_TOOLS.has(tool));
+  const safeTools = allowedTools.filter((tool) => !APPROVAL_REQUIRED_TOOLS.has(tool));
+  const requireApproval: unknown = writeTools.length > 0
+    ? {
+        always: { tool_names: writeTools },
+        never: { tool_names: safeTools },
+      }
+    : "never";
 
   const mcpTool = {
     type: "mcp",
@@ -422,6 +426,7 @@ export default async (c: Context): Promise<Response> => {
     },
     pack: requestedPack,
     tools_available: allowedTools.length,
+    approval_required_tools: writeTools,
   };
   return new Response(JSON.stringify(enriched), {
     status: 200,
