@@ -410,6 +410,16 @@ export default function AlaricVoicePWA() {
   const dcRef = useRef<RTCDataChannel|null>(null);
   const audioRef = useRef<HTMLAudioElement|null>(null);
   const localStream = useRef<MediaStream|null>(null);
+  const faceRef = useRef<HTMLDivElement|null>(null);
+  const audioMotionRef = useRef<{
+    audio: HTMLAudioElement;
+    context: AudioContext;
+    analyser: AnalyserNode;
+    source: MediaElementAudioSourceNode;
+    data: Uint8Array;
+    frame: number;
+    level: number;
+  }|null>(null);
   const wakeFireCooldown = useRef<number>(0);    // suppress repeat wake fires from interimResults
   const sendZoRef = useRef<((text:string)=>Promise<void>)|null>(null);
   const sessionStart = useRef<number>(Date.now());
@@ -441,6 +451,74 @@ export default function AlaricVoicePWA() {
     document.body.style.background = t.bg;
     document.body.style.color = t.fg;
   }, [theme, t.bg, t.fg]);
+
+  const clearAudioMotion = useCallback((audio?: HTMLAudioElement) => {
+    const motion = audioMotionRef.current;
+    if (!motion || (audio && motion.audio !== audio)) return;
+    cancelAnimationFrame(motion.frame);
+    try { motion.source.disconnect(); } catch {}
+    try { motion.analyser.disconnect(); } catch {}
+    void motion.context.close().catch(() => {});
+    audioMotionRef.current = null;
+    faceRef.current?.style.setProperty("--voice-level", "0");
+    faceRef.current?.style.setProperty("--voice-mouth-height", "3px");
+    faceRef.current?.style.setProperty("--voice-mouth-width", "0.75");
+    faceRef.current?.style.setProperty("--voice-mouth-opacity", "0");
+  }, []);
+
+  const attachAudioMotion = useCallback((audio: HTMLAudioElement) => {
+    clearAudioMotion();
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    try {
+      const context = new AudioContextCtor();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.78;
+      const source = context.createMediaElementSource(audio);
+      source.connect(analyser);
+      analyser.connect(context.destination);
+      const motion = {
+        audio,
+        context,
+        analyser,
+        source,
+        data: new Uint8Array(analyser.fftSize),
+        frame: 0,
+        level: 0,
+      };
+      audioMotionRef.current = motion;
+      const tick = () => {
+        if (audioMotionRef.current !== motion) return;
+        analyser.getByteTimeDomainData(motion.data);
+        let sum = 0;
+        for (const sample of motion.data) {
+          const centered = (sample - 128) / 128;
+          sum += centered * centered;
+        }
+        const rms = Math.sqrt(sum / motion.data.length);
+        const target = Math.max(0, Math.min(1, (rms - 0.018) / 0.16));
+        motion.level = motion.level * 0.68 + target * 0.32;
+        const level = motion.level;
+        const face = faceRef.current;
+        if (face) {
+          face.style.setProperty("--voice-level", level.toFixed(3));
+          face.style.setProperty("--voice-mouth-height", `${(3 + level * 15).toFixed(1)}px`);
+          face.style.setProperty("--voice-mouth-width", (0.78 + level * 0.36).toFixed(3));
+          const mouthOpacity = level > 0.025 ? Math.min(0.9, 0.18 + level * 0.72) : 0;
+          face.style.setProperty("--voice-mouth-opacity", mouthOpacity.toFixed(3));
+          face.style.setProperty("--voice-face-y", `${(level * 2.5).toFixed(2)}px`);
+          face.style.setProperty("--voice-face-tilt", `${(Math.sin(performance.now() / 180) * level * 1.15).toFixed(2)}deg`);
+          face.style.setProperty("--voice-face-scale", (1 + level * 0.018).toFixed(4));
+        }
+        motion.frame = requestAnimationFrame(tick);
+      };
+      motion.frame = requestAnimationFrame(tick);
+      void context.resume().catch(() => {});
+    } catch {
+      clearAudioMotion(audio);
+    }
+  }, [clearAudioMotion]);
 
   // Load encrypted conversation_id
   useEffect(() => {
@@ -496,7 +574,7 @@ export default function AlaricVoicePWA() {
   useEffect(() => { if(convRef.current) convRef.current.scrollTop=convRef.current.scrollHeight; },[messages,isTyping,rtUserText]);
   useEffect(() => { const tt=setTimeout(()=>showToast(realtimeMode?"Realtime listening is ready.":"Tap Alaric to listen.","info",setToast_),800); return()=>clearTimeout(tt); },[]); // eslint-disable-line
   useEffect(() => { if("serviceWorker" in navigator) navigator.serviceWorker.register("{{PAGE_PATH}}/sw").catch(()=>{}); },[]);
-  useEffect(() => ()=>{ disconnectRealtime(); stopWake(); },[]); // eslint-disable-line
+  useEffect(() => ()=>{ disconnectRealtime(); stopWake(); clearAudioMotion(); },[]); // eslint-disable-line
 
   async function fallbackTTS(text:string) {
     if(!("speechSynthesis" in window)) return;
@@ -512,19 +590,24 @@ export default function AlaricVoicePWA() {
       return;
     }
     setIsSpeaking(true);
+    let ttsAudio: HTMLAudioElement | null = null;
     try {
       const resp = await authedFetch(TTS_ENDPOINT, { method:"POST", body: JSON.stringify({ text, voice_id: ELEVEN_VOICES[elevenVoice]||elevenVoice }) });
       if(!resp.ok) throw new Error(`TTS ${resp.status}`);
       const url=URL.createObjectURL(await resp.blob());
       const audio=new Audio(url);
-      audio.onended=()=>{URL.revokeObjectURL(url);setIsSpeaking(false);};
-      audio.onerror=()=>{URL.revokeObjectURL(url);fallbackTTS(text).then(()=>setIsSpeaking(false));};
+      ttsAudio = audio;
+      const finish=()=>{clearAudioMotion(audio);URL.revokeObjectURL(url);setIsSpeaking(false);};
+      audio.onended=finish;
+      audio.onerror=()=>{clearAudioMotion(audio);URL.revokeObjectURL(url);fallbackTTS(text).then(()=>setIsSpeaking(false));};
+      attachAudioMotion(audio);
       await audio.play();
     } catch {
+      if (ttsAudio) clearAudioMotion(ttsAudio);
       await fallbackTTS(text);
       setIsSpeaking(false);
     }
-  },[elevenVoice,voiceQuality]);
+  },[attachAudioMotion,clearAudioMotion,elevenVoice,voiceQuality]);
 
   const handleRtEvent = useCallback((raw:MessageEvent)=>{
     let evt:any; try{evt=JSON.parse(raw.data);}catch{return;}
@@ -698,7 +781,7 @@ export default function AlaricVoicePWA() {
           else if(st==="disconnected") scheduleRtReconnect(pc,2500); // may self-heal — grace first
         };
         const audio=new Audio(); audio.autoplay=true; audioRef.current=audio;
-        pc.ontrack=(e)=>{audio.srcObject=e.streams[0];};
+        pc.ontrack=(e)=>{audio.srcObject=e.streams[0];attachAudioMotion(audio);void audio.play().catch(()=>{});};
         pc.addTrack(stream.getTracks()[0]);
         const dc=pc.createDataChannel("oai-events"); dcRef.current=dc;
         dc.onmessage=handleRtEvent;
@@ -739,7 +822,7 @@ export default function AlaricVoicePWA() {
     }
     setRtConnecting(false);
     showToast(`Connect failed after ${MAX_RETRIES} attempts: ${lastErr}`, "error", setToast_);
-  },[personaId,rtConnected,rtConnecting,rtMuted,handleRtEvent]);
+  },[attachAudioMotion,personaId,rtConnected,rtConnecting,rtMuted,handleRtEvent]);
 
   useEffect(()=>{connectRtRef.current=connectRealtime;},[connectRealtime]);
 
@@ -778,7 +861,7 @@ export default function AlaricVoicePWA() {
     if(dcRef.current){try{dcRef.current.close();}catch{}dcRef.current=null;}
     if(pcRef.current){try{pcRef.current.close();}catch{}pcRef.current=null;}
     if(localStream.current){localStream.current.getTracks().forEach(tr=>tr.stop());localStream.current=null;}
-    if(audioRef.current){audioRef.current.srcObject=null;}
+    if(audioRef.current){clearAudioMotion(audioRef.current);audioRef.current.srcObject=null;}
     setRtConnected(false);setRtConnecting(false);setIsRecording(false);setIsSpeaking(false);setRtUserText("");
   }
 
@@ -1010,18 +1093,30 @@ export default function AlaricVoicePWA() {
               <div style={{ position:"absolute",inset:0,borderRadius:"50%",border:"2px solid rgba(0,120,255,0.35)",animation:"ring3 1.6s ease-out infinite 0.8s" }} />
             </>
           )}
-          <button
-            type="button"
-            aria-label={rtMuted ? "Unmute Alaric" : "Mute Alaric"}
-            aria-pressed={!rtMuted}
-            onClick={()=>{
-              if(realtimeMode&&rtConnected) toggleRtMute();
-              else if(!realtimeMode){ if(isRecording) stopRecording(); else startRecording(); }
+          <div
+            ref={faceRef}
+            style={{
+              width:260,height:260,position:"relative",transform:"translate3d(0,var(--voice-face-y,0px),0) rotate(var(--voice-face-tilt,0deg)) scale(var(--voice-face-scale,1))",
+              transition:"transform 90ms linear",willChange:"transform",borderRadius:"50%",
             }}
-            style={{ width:260,height:260,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:`2px solid ${rtMuted?t.fgDim:"rgba(0,120,255,0.4)"}`,padding:0,background:"transparent",cursor:rtConnected||!realtimeMode?"pointer":"default",animation:isSpeaking?"portraitBreathe 1.2s ease-in-out infinite,portraitGlow 1.2s ease-in-out infinite":"portraitGlow 4s ease-in-out infinite" }}
           >
-            <img src="{{PORTRAIT_PATH}}" alt="Alaric" style={{ width:"100%",height:"100%",objectFit:"cover" }} />
-          </button>
+            <button
+              type="button"
+              aria-label={rtMuted ? "Unmute Alaric" : "Mute Alaric"}
+              aria-pressed={!rtMuted}
+              onClick={()=>{
+                if(realtimeMode&&rtConnected) toggleRtMute();
+                else if(!realtimeMode){ if(isRecording) stopRecording(); else startRecording(); }
+              }}
+              style={{ width:"100%",height:"100%",borderRadius:"50%",overflow:"hidden",display:"block",flexShrink:0,border:`2px solid ${rtMuted?t.fgDim:"rgba(0,120,255,0.4)"}`,padding:0,background:"transparent",cursor:rtConnected||!realtimeMode?"pointer":"default",animation:isSpeaking?"portraitBreathe 1.2s ease-in-out infinite,portraitGlow 1.2s ease-in-out infinite":"portraitGlow 4s ease-in-out infinite" }}
+            >
+              <img src="{{PORTRAIT_PATH}}" alt="Alaric" style={{ width:"100%",height:"100%",objectFit:"cover",display:"block" }} />
+              <span
+                aria-hidden="true"
+                style={{ position:"absolute",left:"50%",bottom:"27%",width:23,height:"var(--voice-mouth-height,3px)",borderRadius:"50%",background:"rgba(8,12,24,0.86)",boxShadow:"0 0 calc(5px + var(--voice-level,0) * 12px) rgba(0,212,255,0.72)",opacity:"var(--voice-mouth-opacity,0)",transform:"translateX(-50%) scaleX(var(--voice-mouth-width,0.75))",transformOrigin:"center",willChange:"height,transform,opacity" }}
+              />
+            </button>
+          </div>
         </div>
         <p role="status" aria-live="polite" style={{ fontSize:12,marginTop:8,letterSpacing:"0.06em",textTransform:"uppercase",color:statusColor,transition:"color 0.3s" }}>{statusText}</p>
         {realtimeMode&&voiceQuality!=="browser"&&(() => {
