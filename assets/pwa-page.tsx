@@ -174,14 +174,6 @@ const THEMES: Record<Theme, Record<string, string>> = {
 };
 
 // ── Icons ─────────────────────────────────────────────────────────────
-function MicIcon({ size = 20 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>;
-}
-function MicOffIcon({ size = 20 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>;
-}
-function StopIcon({ size = 20 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>; }
-function VolumeIcon({ size = 20 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>; }
 function SendIcon() { return <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>; }
 function SettingsIcon() { return <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>; }
 function CloseIcon() { return <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>; }
@@ -372,7 +364,6 @@ function ArchiveDrawer({ entries, currentId, theme, t, onLoad, onDelete, onExpor
   );
 }
 
-const PTT_HOLD_MS = 2500;
 const ARCHIVE_LS = "alaric_archive_v1";
 
 export default function AlaricVoicePWA() {
@@ -401,7 +392,6 @@ export default function AlaricVoicePWA() {
   const [rtMuted,setRtMuted] = useState(false);
   const [rtUserText,setRtUserText] = useState("");
   const [personas, setPersonas] = useState<PersonaOption[]>(FALLBACK_PERSONAS);
-  const [pttProgress, setPttProgress] = useState(0); // 0-100
   const [tagInput, setTagInput] = useState("");
   const [convTags, setConvTags] = useState<string[]>([]);
   const [archive, setArchive] = useState<ArchiveEntry[]>(() => {
@@ -416,15 +406,10 @@ export default function AlaricVoicePWA() {
   const wakeRec = useRef<any>(null);
   const wakeTimer = useRef<any>(null);
   const wakeWasArmed = useRef<boolean>(false);
-  const pressTimer = useRef<any>(null);
-  const pressStart = useRef<number>(0);
-  const pttRaf = useRef<number | null>(null);
   const pcRef = useRef<RTCPeerConnection|null>(null);
   const dcRef = useRef<RTCDataChannel|null>(null);
   const audioRef = useRef<HTMLAudioElement|null>(null);
   const localStream = useRef<MediaStream|null>(null);
-  const wakeGatedMuted = useRef<boolean>(false); // true while track is muted *by wake gate* (vs user mute)
-  const rtRemuteTimer = useRef<any>(null);       // timer that re-mutes track after assistant reply
   const wakeFireCooldown = useRef<number>(0);    // suppress repeat wake fires from interimResults
   const sendZoRef = useRef<((text:string)=>Promise<void>)|null>(null);
   const sessionStart = useRef<number>(Date.now());
@@ -443,6 +428,7 @@ export default function AlaricVoicePWA() {
   const rtDataOpen = useRef(false);
   const rtCatalogReady = useRef(false);
   const rtMcpReadyTimer = useRef<any>(null);
+  const autoConnectStarted = useRef(false);
 
   // Inject animations + apply theme to body
   useEffect(() => {
@@ -508,9 +494,9 @@ export default function AlaricVoicePWA() {
   }
 
   useEffect(() => { if(convRef.current) convRef.current.scrollTop=convRef.current.scrollHeight; },[messages,isTyping,rtUserText]);
-  useEffect(() => { const tt=setTimeout(()=>showToast(realtimeMode?"Tap ⚡ to start a realtime session.":"Tap the mic or type to speak.","info",setToast_),800); return()=>clearTimeout(tt); },[]); // eslint-disable-line
+  useEffect(() => { const tt=setTimeout(()=>showToast(realtimeMode?"Realtime listening is ready.":"Tap Alaric to listen.","info",setToast_),800); return()=>clearTimeout(tt); },[]); // eslint-disable-line
   useEffect(() => { if("serviceWorker" in navigator) navigator.serviceWorker.register("{{PAGE_PATH}}/sw").catch(()=>{}); },[]);
-  useEffect(() => ()=>{ disconnectRealtime(); stopWake(); if (pttRaf.current) cancelAnimationFrame(pttRaf.current); },[]); // eslint-disable-line
+  useEffect(() => ()=>{ disconnectRealtime(); stopWake(); },[]); // eslint-disable-line
 
   async function fallbackTTS(text:string) {
     if(!("speechSynthesis" in window)) return;
@@ -555,8 +541,6 @@ export default function AlaricVoicePWA() {
     if (mcpCatalogReady) {
       rtCatalogReady.current = true;
       if (rtMcpReadyTimer.current) { clearTimeout(rtMcpReadyTimer.current); rtMcpReadyTimer.current = null; }
-      const track = localStream.current?.getAudioTracks()[0];
-      if (track) { track.enabled = true; setRtMuted(false); }
       setRtConnected(true);
       setRtConnecting(false);
       showToast("Realtime connected — just start talking!","success",setToast_);
@@ -648,18 +632,7 @@ export default function AlaricVoicePWA() {
           if(text) setMessages(m=>[...m,{role:"assistant",text,time:ts()}]);
         }
         break;
-      case"response.done":
-        // Re-mute mic after the ENTIRE response (all items) is complete — not on each intermediate item.
-        // This prevents the re-mute race where an intermediate speech item fires the timer
-        // before the model has finished generating the final spoken answer after a tool call.
-        if(wakeGatedMuted.current && localStream.current){
-          if(rtRemuteTimer.current) clearTimeout(rtRemuteTimer.current);
-          rtRemuteTimer.current = setTimeout(()=>{
-            const tr=localStream.current?.getAudioTracks()[0];
-            if(tr){ tr.enabled=false; setRtMuted(true); }
-          }, 1500);
-        }
-        break;
+      case"response.done": break;
       case"error": showToast(`Realtime error: ${evt.error?.message||"unknown"}`,"error",setToast_); break;
     }
   },[]); // eslint-disable-line
@@ -714,7 +687,7 @@ export default function AlaricVoicePWA() {
         const stream=await navigator.mediaDevices.getUserMedia({audio:true});
         localStream.current=stream;
         const inputTrack=stream.getAudioTracks()[0];
-        if(inputTrack){inputTrack.enabled=false;setRtMuted(true);}
+        if(inputTrack) inputTrack.enabled=!rtMuted;
         rtDataOpen.current=false;
         rtCatalogReady.current=false;
         const pc=new RTCPeerConnection(); pcRef.current=pc;
@@ -766,9 +739,16 @@ export default function AlaricVoicePWA() {
     }
     setRtConnecting(false);
     showToast(`Connect failed after ${MAX_RETRIES} attempts: ${lastErr}`, "error", setToast_);
-  },[personaId,rtConnected,rtConnecting,handleRtEvent]);
+  },[personaId,rtConnected,rtConnecting,rtMuted,handleRtEvent]);
 
   useEffect(()=>{connectRtRef.current=connectRealtime;},[connectRealtime]);
+
+  useEffect(()=>{
+    if(!realtimeMode||voiceQuality==="browser"||autoConnectStarted.current) return;
+    autoConnectStarted.current=true;
+    const timer=window.setTimeout(()=>connectRealtime(),0);
+    return()=>window.clearTimeout(timer);
+  },[connectRealtime,realtimeMode,voiceQuality,personaId]);
 
   // One bounded auto-reconnect after a dropped realtime session. Single-flight
   // via rtReconnectTimer; re-checks liveness after the delay so a self-healed
@@ -792,11 +772,9 @@ export default function AlaricVoicePWA() {
   function disconnectRealtime(){
     userDisconnected.current=true;
     if(rtReconnectTimer.current){clearTimeout(rtReconnectTimer.current);rtReconnectTimer.current=null;}
-    if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
     if(rtMcpReadyTimer.current){clearTimeout(rtMcpReadyTimer.current);rtMcpReadyTimer.current=null;}
     rtDataOpen.current=false;
     rtCatalogReady.current=false;
-    wakeGatedMuted.current=false;
     if(dcRef.current){try{dcRef.current.close();}catch{}dcRef.current=null;}
     if(pcRef.current){try{pcRef.current.close();}catch{}pcRef.current=null;}
     if(localStream.current){localStream.current.getTracks().forEach(tr=>tr.stop());localStream.current=null;}
@@ -808,9 +786,6 @@ export default function AlaricVoicePWA() {
     if(!localStream.current) return;
     const track=localStream.current.getAudioTracks()[0]; if(!track) return;
     track.enabled=rtMuted; setRtMuted(v=>!v);
-    // User mute overrides the wake gate.
-    wakeGatedMuted.current=false;
-    if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
     showToast(rtMuted?"Microphone unmuted":"Microphone muted","info",setToast_);
   },[rtMuted]);
 
@@ -858,32 +833,6 @@ export default function AlaricVoicePWA() {
     setIsRecording(true); try{speechRec.current.start();}catch{}
   },[sendMessage,stopRecording]);
 
-  // Push-to-talk gauge animation
-  const beginPtt = useCallback(() => {
-    pressStart.current = Date.now();
-    setPttProgress(0);
-    if (navigator.vibrate) navigator.vibrate(15);
-    const tick = () => {
-      const elapsed = Date.now() - pressStart.current;
-      const pct = Math.min(100, (elapsed / PTT_HOLD_MS) * 100);
-      setPttProgress(pct);
-      if (pct < 100 && pressStart.current > 0) pttRaf.current = requestAnimationFrame(tick);
-    };
-    pttRaf.current = requestAnimationFrame(tick);
-    pressTimer.current = setTimeout(() => {
-      startRecording();
-      if (navigator.vibrate) navigator.vibrate([10, 40, 10]);
-    }, 150);
-  }, [startRecording]);
-
-  const endPtt = useCallback(() => {
-    pressStart.current = 0;
-    if (pttRaf.current) { cancelAnimationFrame(pttRaf.current); pttRaf.current = null; }
-    setPttProgress(0);
-    if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; }
-    if (isRecording) stopRecording();
-  }, [isRecording, stopRecording]);
-
   const WAKE_PHRASES=["hey {{ASSISTANT_SLUG}}","{{ASSISTANT_SLUG}}","hey eric","hey claric"];
   const stopWake=useCallback(()=>{
     if(wakeTimer.current){clearTimeout(wakeTimer.current);wakeTimer.current=null;}
@@ -904,17 +853,8 @@ export default function AlaricVoicePWA() {
           wakeFireCooldown.current = now;
           const cmd=WAKE_PHRASES.reduce((s,p)=>s.replace(new RegExp(p,"gi"),""),tx).trim();
           if(realtimeMode&&rtConnected){
-            // Wake gates realtime: unmute mic so the next utterance reaches OpenAI.
-            const tr=localStream.current?.getAudioTracks()[0];
-            if(tr){ tr.enabled=true; setRtMuted(false); wakeGatedMuted.current=true; }
-            if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
             if(cmd.length>2) sendRealtimeText(cmd);
             else showToast("Listening…","info",setToast_,1500);
-            // Safety re-mute if assistant never replies within 12s.
-            rtRemuteTimer.current = setTimeout(()=>{
-              const t2=localStream.current?.getAudioTracks()[0];
-              if(t2){ t2.enabled=false; setRtMuted(true); }
-            }, 12000);
           } else {
             if(cmd.length>2) sendMessage(cmd);
             else { showToast("Listening…","info",setToast_,1500); startRecording(); }
@@ -935,20 +875,6 @@ export default function AlaricVoicePWA() {
     else{wakeWasArmed.current=true;startWake();}
   },[wakeActive,startWake,stopWake]);
 
-  // Wake-gates-realtime: when both are active, the WebRTC mic stays muted until the
-  // wake word fires. The wake handler unmutes; assistant-reply or timeout re-mutes.
-  useEffect(()=>{
-    if(!localStream.current) return;
-    const tr=localStream.current.getAudioTracks()[0]; if(!tr) return;
-    if(rtConnected && wakeActive){
-      tr.enabled=false; setRtMuted(true); wakeGatedMuted.current=true;
-      showToast('Wake-gated — say "Hey {{ASSISTANT_NAME}}" to talk',"info",setToast_,2500);
-    } else if(rtConnected && !wakeActive && wakeGatedMuted.current){
-      tr.enabled=true; setRtMuted(false); wakeGatedMuted.current=false;
-      if(rtRemuteTimer.current){clearTimeout(rtRemuteTimer.current);rtRemuteTimer.current=null;}
-    }
-  },[rtConnected,wakeActive]);
-
   const archiveCurrent = useCallback(() => {
     if (messages.length === 0) return;
     const id = convId || `local-${Date.now()}`;
@@ -964,7 +890,6 @@ export default function AlaricVoicePWA() {
 
   const clearSession=useCallback((skipArchive = false)=>{
     if (!skipArchive && messages.length > 1) archiveCurrent();
-    if(realtimeMode&&rtConnected){disconnectRealtime();showToast("Session ended.","info",setToast_);}
     setMessages([]);setConvId("");setConvTags([]);saveConvId("");setRtUserText("");
     sessionStart.current = Date.now();
     if(!realtimeMode)showToast("New session started.","success",setToast_);
@@ -973,6 +898,7 @@ export default function AlaricVoicePWA() {
   const handleSave=(rt:boolean,rtV:string,persona:string,elv:string,q:string)=>{
     if(!rt&&rtConnected)disconnectRealtime();
     if(rt&&rtConnected&&persona!==personaId){disconnectRealtime();showToast("Persona changed — reconnect to apply.","info",setToast_);}
+    if(rt) autoConnectStarted.current=false;
     setRealtimeMode(rt);setRtVoice(rtV);setPersonaId(persona);setElevenVoice(elv);setVoiceQuality(q);
     localStorage.setItem("alaric_rt_mode",String(rt));localStorage.setItem("alaric_rt_voice",rtV);
     localStorage.setItem("alaric_persona_id",persona);localStorage.setItem("alaric_voice_name",elv);
@@ -1045,11 +971,11 @@ export default function AlaricVoicePWA() {
   }
 
   const statusText=realtimeMode
-    ?rtConnecting?"Connecting…":rtConnected?(isRecording?"Listening…":isSpeaking?"Speaking…":"Live"):"Tap ⚡ to connect"
-    :isSpeaking?"Speaking…":isRecording?"Listening…":isTyping?"Thinking…":"Ready";
+    ?rtConnecting?"Connecting…":rtConnected?(rtMuted?"Muted":isRecording?"Listening…":isSpeaking?"Speaking…":"Listening"):"Connecting…"
+    :isSpeaking?"Speaking…":isRecording?"Listening…":isTyping?"Thinking…":"Muted";
   const statusColor=rtConnecting?t.warn
-    :(rtConnected&&realtimeMode)||(!realtimeMode&&!isSpeaking&&!isRecording&&!isTyping)?t.success
-    :isSpeaking?t.info:isRecording?t.error:isTyping?t.accent:t.fgFaint;
+    :(rtConnected&&realtimeMode&&!rtMuted)||(!realtimeMode&&!isSpeaking&&!isRecording&&!isTyping)?t.success
+    :rtMuted?t.fgDim:isSpeaking?t.info:isRecording?t.error:isTyping?t.accent:t.fgFaint;
 
   const btnBase:React.CSSProperties={width:38,height:38,borderRadius:10,border:`1px solid ${t.border}`,background:t.surface2,color:t.fgMuted,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"};
 
@@ -1060,7 +986,7 @@ export default function AlaricVoicePWA() {
 
       <header style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"20px 24px 16px",position:"relative",zIndex:10,flexShrink:0 }}>
         <div>
-          <h1 style={{ fontSize:18,fontWeight:700,color:t.fg,lineHeight:1.2,margin:0 }}>{{ASSISTANT_NAME}}</h1>
+          <h1 style={{ fontSize:18,fontWeight:700,color:t.fg,lineHeight:1.2,margin:0 }}>{"{{ASSISTANT_NAME}}"}</h1>
           <p style={{ fontSize:12,color:t.fgDim,marginTop:1 }}>Voice AI Assistant</p>
         </div>
         <div style={{ display:"flex",alignItems:"center",gap:8 }}>
@@ -1070,12 +996,6 @@ export default function AlaricVoicePWA() {
             <EarIcon active={wakeActive} />
             {wakeActive&&<div style={{ position:"absolute",top:6,right:6,width:7,height:7,borderRadius:"50%",background:"#22c55e",animation:"wakeWordPulse 1.5s ease-in-out infinite" }} />}
           </button>
-          {realtimeMode&&voiceQuality!=="browser"&&(
-            <button onClick={rtConnected?()=>{disconnectRealtime();showToast("Disconnected.","info",setToast_);}:connectRealtime} disabled={rtConnecting} title="Realtime"
-              style={{ ...btnBase,border:`1px solid ${rtConnected?"rgba(34,197,94,0.4)":rtConnecting?"rgba(245,158,11,0.4)":t.border}`,background:rtConnected?"rgba(34,197,94,0.1)":rtConnecting?"rgba(245,158,11,0.1)":t.surface2,color:rtConnected?t.success:rtConnecting?t.warn:t.fgMuted,cursor:rtConnecting?"default":"pointer" }}>
-              {rtConnecting?<div style={{ width:14,height:14,border:`2px solid ${t.warn}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite" }} />:<BoltIcon />}
-            </button>
-          )}
           <button onClick={()=>clearSession()} title="New session" style={btnBase}><RefreshIcon /></button>
           <button onClick={()=>setShowSettings(true)} title="Settings" style={btnBase}><SettingsIcon /></button>
         </div>
@@ -1090,11 +1010,20 @@ export default function AlaricVoicePWA() {
               <div style={{ position:"absolute",inset:0,borderRadius:"50%",border:"2px solid rgba(0,120,255,0.35)",animation:"ring3 1.6s ease-out infinite 0.8s" }} />
             </>
           )}
-          <div style={{ width:260,height:260,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:"2px solid rgba(0,120,255,0.4)",animation:isSpeaking?"portraitBreathe 1.2s ease-in-out infinite,portraitGlow 1.2s ease-in-out infinite":"portraitGlow 4s ease-in-out infinite" }}>
-            <img src="{{PORTRAIT_PATH}}" alt="AI Assistant" style={{ width:"100%",height:"100%",objectFit:"cover" }} />
-          </div>
+          <button
+            type="button"
+            aria-label={rtMuted ? "Unmute Alaric" : "Mute Alaric"}
+            aria-pressed={!rtMuted}
+            onClick={()=>{
+              if(realtimeMode&&rtConnected) toggleRtMute();
+              else if(!realtimeMode){ if(isRecording) stopRecording(); else startRecording(); }
+            }}
+            style={{ width:260,height:260,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:`2px solid ${rtMuted?t.fgDim:"rgba(0,120,255,0.4)"}`,padding:0,background:"transparent",cursor:rtConnected||!realtimeMode?"pointer":"default",animation:isSpeaking?"portraitBreathe 1.2s ease-in-out infinite,portraitGlow 1.2s ease-in-out infinite":"portraitGlow 4s ease-in-out infinite" }}
+          >
+            <img src="{{PORTRAIT_PATH}}" alt="Alaric" style={{ width:"100%",height:"100%",objectFit:"cover" }} />
+          </button>
         </div>
-        <p style={{ fontSize:12,marginTop:8,letterSpacing:"0.06em",textTransform:"uppercase",color:statusColor,transition:"color 0.3s" }}>{statusText}</p>
+        <p role="status" aria-live="polite" style={{ fontSize:12,marginTop:8,letterSpacing:"0.06em",textTransform:"uppercase",color:statusColor,transition:"color 0.3s" }}>{statusText}</p>
         {realtimeMode&&voiceQuality!=="browser"&&(() => {
           const active = personas.find(p => p.id === personaId);
           const label = active ? `${active.name}${active.voice ? ` · ${active.voice}` : ''}` : rtVoice;
@@ -1104,31 +1033,6 @@ export default function AlaricVoicePWA() {
             </div>
           );
         })()}
-        <div style={{ marginTop:20,display:"flex",flexDirection:"column",alignItems:"center",gap:8,position:"relative" }}>
-          {/* PTT progress ring */}
-          {pttProgress > 0 && !realtimeMode && (
-            <svg width={96} height={96} style={{ position:"absolute",top:-8,left:"50%",transform:"translateX(-50%)",pointerEvents:"none",zIndex:1 }}>
-              <circle cx={48} cy={48} r={44} fill="none" stroke={t.border} strokeWidth={3} />
-              <circle cx={48} cy={48} r={44} fill="none" stroke={t.accent} strokeWidth={3}
-                strokeDasharray={`${(2*Math.PI*44)*(pttProgress/100)} ${2*Math.PI*44}`}
-                transform="rotate(-90 48 48)" strokeLinecap="round" />
-            </svg>
-          )}
-          <button
-            style={{ width:80,height:80,borderRadius:"50%",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s",position:"relative",zIndex:2,...(isRecording?{background:t.error,animation:"micPulseRed 1.5s ease-out infinite"}:isSpeaking?{background:t.info,animation:"micPulseTeal 1.5s ease-out infinite"}:(realtimeMode&&rtConnected&&!rtMuted)?{background:t.success,animation:"micPulseGreen 2s ease-out infinite"}:{background:t.accent,boxShadow:`0 4px 24px ${t.accentSoft}`}) }}
-            onClick={()=>{if(realtimeMode){if(rtConnected)toggleRtMute();else if(voiceQuality!=="browser")connectRealtime();else showToast("Realtime disabled in Browser quality.","info",setToast_);}else{if(isRecording)stopRecording();else startRecording();}}}
-            onMouseDown={()=>{if(!realtimeMode){beginPtt();}}}
-            onMouseUp={()=>{if(!realtimeMode){endPtt();}}}
-            onMouseLeave={()=>{if(!realtimeMode&&pressStart.current>0){endPtt();}}}
-            onTouchStart={e=>{if(!realtimeMode){e.preventDefault();beginPtt();}}}
-            onTouchEnd={e=>{if(!realtimeMode){e.preventDefault();endPtt();}}}
-          >
-            {realtimeMode?rtMuted?<MicOffIcon size={32}/>:rtConnected?<MicIcon size={32}/>:<BoltIcon size={32}/>:isRecording?<StopIcon size={32}/>:isSpeaking?<VolumeIcon size={32}/>:<MicIcon size={32}/>}
-          </button>
-          <span style={{ fontSize:11,color:t.fgFaint,letterSpacing:"0.06em",textTransform:"uppercase" }}>
-            {realtimeMode?rtConnecting?"Connecting…":rtConnected?(rtMuted?"Tap to unmute":"Tap to mute"):"Tap to connect":isRecording?"Tap to stop":"Push & hold to talk"}
-          </span>
-        </div>
       </div>
 
       {rtUserText&&<div style={{ padding:"0 24px 8px",position:"relative",zIndex:10,flexShrink:0 }}><p style={{ fontSize:13,color:t.fgDim,textAlign:"right",margin:0,fontStyle:"italic" }}>"{rtUserText}"</p></div>}
@@ -1154,7 +1058,7 @@ export default function AlaricVoicePWA() {
         {messages.length===0&&(
           <div style={{ display:"flex",flexDirection:"column",alignItems:"center",textAlign:"center",padding:"16px 20px" }}>
             <p style={{ fontSize:14,color:t.fgDim,maxWidth:280,lineHeight:1.6 }}>
-              {realtimeMode&&voiceQuality!=="browser"?"AI assistant + Zo tools. Tap ⚡ to start a realtime session.":"Tap the mic or type to speak."}
+              {realtimeMode&&voiceQuality!=="browser"?"AI assistant + Zo tools. Realtime listening is active.":"Tap Alaric or type to speak."}
             </p>
           </div>
         )}
