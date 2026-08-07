@@ -28,7 +28,7 @@
 
 import type { Context } from "hono";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 const ZO_MCP_ENDPOINT = "https://api.zo.computer/mcp";
 const DEFAULT_MEMORY_DB = "/home/workspace/.zo/memory/shared-facts.db";
@@ -395,6 +395,85 @@ const TOOL_DEFINITIONS: Array<{
         max_projects: { type: "integer", description: "Max projects (1-20). Default 10." },
         max_issues: { type: "integer", description: "Recent issues per project (1-10). Default 5." },
       },
+    },
+  },
+  {
+    name: "factory_status",
+    description: "Digest of the Zouroboros Software Factory: active and recent build executions with ticket, state, branch, PR, and blocker/error. Use when the user asks 'what is the factory doing', 'build status', 'any builds running/failed', or about factory throughput.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "integer", description: "Max executions to summarize (1-20). Default 8." },
+        state: { type: "string", description: "Optional state filter, e.g. 'failed', 'merged', 'running'. Default all states." },
+      },
+    },
+  },
+  {
+    name: "factory_run_details",
+    description: "Full detail for one factory build: lifecycle state, stage, branch, PR, timestamps, error, executor failover trail, risk tier, evidence. Use after factory_status when the user drills into one ticket or asks why a build failed. Accepts a ZOU identifier (e.g. 'ZOU-1011') or execution id (e.g. 'exec-f7e41626').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "ZOU-nnn ticket identifier or exec-xxxxxxxx execution id." },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "github_status",
+    description: "GitHub repository status: open pull requests and recent workflow runs (CI). Use when the user asks about PRs, checks, CI, or repo activity. Default repo is marlandoj/zouroboros.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        repo: { type: "string", description: "owner/name repo slug. Default 'marlandoj/zouroboros'." },
+      },
+    },
+  },
+  {
+    name: "linear_issue_details",
+    description: "Read one Linear issue in depth: title, state, assignee, priority, description, latest comments, and related/blocking issues. Use when the user asks about a specific ticket like 'ZOU-1110'.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        identifier: { type: "string", description: "Issue identifier, e.g. 'ZOU-1110'." },
+      },
+      required: ["identifier"],
+    },
+  },
+  {
+    name: "drive_search",
+    description: "Search the user's Google Drive for files and documents by name or Drive query. Use when they ask to find a doc, sheet, or file in Drive.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "File name term (e.g. 'Q3 budget') or raw Drive query (e.g. \"name contains 'report'\")." },
+        max_results: { type: "integer", description: "Max files (1-20). Default 10." },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "service_logs",
+    description: "Tail the log of a hosted user service (stdout or stderr). Use when the user asks what a service is logging or why it is failing. Get service names from list_user_services.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        service: { type: "string", description: "Service name as it appears in /dev/shm logs, e.g. 'zouroboros-support'." },
+        lines: { type: "integer", description: "Lines to tail (10-200). Default 60." },
+        stream: { type: "string", enum: ["out", "err"], description: "stdout or stderr. Default 'out'." },
+      },
+      required: ["service"],
+    },
+  },
+  {
+    name: "alaric_query",
+    description: "Delegate a complex READ-ONLY question to the full Alaric assistant (files, code, research, cross-system analysis) and return a concise spoken summary. Slow (up to ~40s) — tell the user you are working on it. Use only when no more specific tool fits.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "The question to research. Self-contained; include any names/paths mentioned." },
+      },
+      required: ["question"],
     },
   },
   // -------- POWER --------
@@ -931,6 +1010,267 @@ async function handleLinearProjectUpdates(args: any) {
   return toolResult(`Linear project updates${query ? ` matching "${query}"` : ""}:\n${lines.join("\n")}`);
 }
 
+// =========================================================================
+// OPERATOR READ TOOLS (factory / github / linear issue / drive / logs / fallback)
+// =========================================================================
+
+// Factory execution state is fragmented across rotated conveyor roots plus the
+// canonical checkout; any single directory under-counts. Union by execution_id,
+// keeping the record with the newest state_updated_at.
+const FACTORY_CANONICAL_STATE = "/home/workspace/Projects/zouroboros-software-factory/state";
+const FACTORY_RUNTIME_ROOT = "/home/workspace/.runtime";
+
+function factoryStateRoots(): string[] {
+  const roots = [FACTORY_CANONICAL_STATE];
+  try {
+    for (const entry of readdirSync(FACTORY_RUNTIME_ROOT)) {
+      if (!entry.startsWith("factory-conveyor")) continue;
+      const candidate = `${FACTORY_RUNTIME_ROOT}/${entry}/Projects/zouroboros-software-factory/state`;
+      if (existsSync(candidate)) roots.push(candidate);
+    }
+  } catch { /* runtime root absent — canonical only */ }
+  return roots;
+}
+
+type FactoryExec = Record<string, any>;
+
+function loadFactoryExecutions(): FactoryExec[] {
+  const byId = new Map<string, FactoryExec>();
+  for (const root of factoryStateRoots()) {
+    let files: string[] = [];
+    try { files = readdirSync(root); } catch { continue; }
+    for (const file of files) {
+      if (!/^exec-exec-[a-z0-9]+\.json$/.test(file)) continue;
+      try {
+        const rec = JSON.parse(readFileSync(`${root}/${file}`, "utf8"));
+        const id = String(rec?.execution_id || file.replace(/^exec-|\.json$/g, ""));
+        const prev = byId.get(id);
+        const recTime = Date.parse(rec?.state_updated_at || rec?.completed_at || rec?.started_at || "") || 0;
+        const prevTime = prev ? (Date.parse(prev?.state_updated_at || prev?.completed_at || prev?.started_at || "") || 0) : -1;
+        if (!prev || recTime >= prevTime) byId.set(id, rec);
+      } catch { /* skip unparseable record */ }
+    }
+  }
+  return [...byId.values()].sort((a, b) =>
+    (Date.parse(b?.state_updated_at || b?.started_at || "") || 0) - (Date.parse(a?.state_updated_at || a?.started_at || "") || 0)
+  );
+}
+
+function factoryExecTime(rec: FactoryExec): string {
+  const ts = rec?.state_updated_at || rec?.completed_at || rec?.started_at;
+  const date = new Date(String(ts || ""));
+  return Number.isNaN(date.getTime()) ? "unknown time" : date.toISOString().replace("T", " ").slice(0, 16) + "Z";
+}
+
+async function handleFactoryStatus(args: any) {
+  const limit = Math.min(Math.max(parseInt(args?.limit ?? "8", 10) || 8, 1), 20);
+  const stateFilter = String(args?.state || "").trim().toLowerCase().slice(0, 30);
+  let execs = loadFactoryExecutions();
+  if (!execs.length) return toolResult("No factory execution records found.");
+  const counts = new Map<string, number>();
+  for (const rec of execs) {
+    const state = String(rec?.state || "unknown");
+    counts.set(state, (counts.get(state) || 0) + 1);
+  }
+  if (stateFilter) execs = execs.filter((rec) => String(rec?.state || "").toLowerCase() === stateFilter);
+  const countLine = [...counts.entries()].map(([state, n]) => `${n} ${state}`).join(", ");
+  const lines = execs.slice(0, limit).map((rec) => {
+    const pr = rec?.pr_number ? `PR #${rec.pr_number}` : "no PR";
+    const error = rec?.error ? `; error: ${String(rec.error).slice(0, 110)}` : "";
+    return `• ${rec?.identifier || "?"} [${rec?.state || "?"}/${rec?.stage || "?"}] ${String(rec?.ticket_title || "").slice(0, 70)} — ${pr}; ${factoryExecTime(rec)}${error} (${rec?.execution_id})`;
+  });
+  const filterNote = stateFilter ? ` matching state '${stateFilter}' (${execs.length})` : "";
+  return toolResult(`Factory: ${countLine}.${filterNote}\n${lines.join("\n") || "No executions match."}`);
+}
+
+async function handleFactoryRunDetails(args: any) {
+  const rawId = String(args?.id || "").trim();
+  if (!rawId) return toolResult("missing id", true);
+  const needle = rawId.toLowerCase();
+  const execs = loadFactoryExecutions();
+  const matches = execs.filter((rec) =>
+    String(rec?.identifier || "").toLowerCase() === needle ||
+    String(rec?.execution_id || "").toLowerCase() === needle ||
+    String(rec?.execution_id || "").toLowerCase() === `exec-${needle}`
+  );
+  if (!matches.length) return toolResult(`No factory execution found for '${rawId}'. Try factory_status to list recent runs.`, true);
+  const sections = matches.slice(0, 3).map((rec) => {
+    const started = rec?.started_at ? String(rec.started_at) : "unknown";
+    const completed = rec?.completed_at ? String(rec.completed_at) : "in progress";
+    const parts = [
+      `${rec?.identifier || "?"} ${rec?.execution_id || ""} — ${String(rec?.ticket_title || "").slice(0, 100)}`,
+      `state: ${rec?.state || "?"} / stage: ${rec?.stage || "?"}; delivery target: ${rec?.delivery_target || "?"}; target reached: ${rec?.target_reached}`,
+      `branch: ${rec?.branch_name || "none"}; ${rec?.pr_number ? `PR #${rec.pr_number}` : "no PR"}; repo: ${rec?.repo_path || "?"}`,
+      `started: ${started}; completed: ${completed}; last update: ${factoryExecTime(rec)}`,
+    ];
+    if (rec?.risk?.tier) parts.push(`risk: ${rec.risk.tier} (score ${rec.risk.score ?? "?"}, mode ${rec.risk.mode ?? "?"})`);
+    if (rec?.error) parts.push(`error: ${String(rec.error).slice(0, 300)}`);
+    if (rec?.failover_trail) parts.push(`failover: ${String(rec.failover_trail).slice(0, 250)}`);
+    if (rec?.result_summary) parts.push(`result: ${String(rec.result_summary).slice(0, 250)}`);
+    if (rec?.evidence_manifest?.path) parts.push(`evidence: ${rec.evidence_manifest.path}`);
+    return parts.join("\n");
+  });
+  return toolResult(sections.join("\n\n"));
+}
+
+const REPO_SLUG_REGEX = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+async function handleGithubStatus(args: any, apiKey: string) {
+  const repo = String(args?.repo || "marlandoj/zouroboros").trim();
+  if (!REPO_SLUG_REGEX.test(repo)) return toolResult("invalid repo slug (expected owner/name)", true);
+  const cmd = `gh pr list -R ${repo} --limit 8 --state open; echo ---RUNS---; gh run list -R ${repo} --limit 5 2>/dev/null || echo 'no workflow runs'`;
+  const r = await callZoMcp("bash", { cmd }, apiKey, 14_000);
+  if (!r.ok) return toolResult(r.error, true);
+  const m = r.text.match(/stdout='([\s\S]*?)', stderr=/);
+  const stdout = (m ? m[1].replace(/\\n/g, "\n").replace(/\\t/g, "  ") : r.text).trim();
+  if (!stdout) return toolResult(`No open PRs or runs found for ${repo}.`);
+  const [prs, runs] = stdout.split("---RUNS---");
+  const prBlock = (prs || "").trim() || "No open PRs.";
+  const runBlock = (runs || "").trim() || "No recent workflow runs.";
+  return toolResult(`${repo}\nOpen PRs:\n${prBlock}\n\nRecent CI runs:\n${runBlock}`.slice(0, 6000));
+}
+
+async function handleLinearIssueDetails(args: any) {
+  const linearApiKey = process.env.LINEAR_API_KEY;
+  if (!linearApiKey) {
+    return toolResult("Linear is not configured. Add LINEAR_API_KEY in Zo Settings > Advanced > Secrets.", true);
+  }
+  const identifier = String(args?.identifier || "").trim().toUpperCase();
+  if (!/^[A-Z]{2,10}-\d{1,6}$/.test(identifier)) return toolResult("invalid identifier (expected e.g. ZOU-1110)", true);
+  const graphql = `
+    query VoiceIssueDetails($id: String!) {
+      issue(id: $id) {
+        identifier title url updatedAt priorityLabel
+        state { name }
+        assignee { name }
+        project { name }
+        description
+        comments(last: 3) { nodes { createdAt user { name } body } }
+        relations(first: 8) { nodes { type relatedIssue { identifier title } } }
+      }
+    }
+  `;
+  const response = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: { Authorization: linearApiKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ query: graphql, variables: { id: identifier } }),
+  });
+  const raw = await response.text();
+  let payload: any;
+  try { payload = JSON.parse(raw); } catch {
+    return toolResult(`Linear returned a non-JSON response (HTTP ${response.status}).`, true);
+  }
+  if (!response.ok || payload?.errors?.length) {
+    const detail = payload?.errors?.[0]?.message || `HTTP ${response.status}`;
+    return toolResult(`Linear request failed: ${String(detail).slice(0, 300)}`, true);
+  }
+  const issue = payload?.data?.issue;
+  if (!issue) return toolResult(`No Linear issue found for ${identifier}.`, true);
+  const parts = [
+    `${issue.identifier}: ${issue.title}`,
+    `state: ${issue.state?.name || "?"}; assignee: ${issue.assignee?.name || "unassigned"}; priority: ${issue.priorityLabel || "none"}; project: ${issue.project?.name || "none"}; updated: ${String(issue.updatedAt || "").slice(0, 10)}`,
+  ];
+  if (issue.description) parts.push(`description: ${String(issue.description).replace(/\s+/g, " ").slice(0, 500)}`);
+  const comments = Array.isArray(issue.comments?.nodes) ? issue.comments.nodes : [];
+  if (comments.length) {
+    parts.push("latest comments:");
+    for (const comment of comments) {
+      parts.push(`  - ${String(comment?.createdAt || "").slice(0, 10)} ${comment?.user?.name || "someone"}: ${String(comment?.body || "").replace(/\s+/g, " ").slice(0, 200)}`);
+    }
+  }
+  const relations = Array.isArray(issue.relations?.nodes) ? issue.relations.nodes : [];
+  if (relations.length) {
+    parts.push("related:");
+    for (const rel of relations) {
+      parts.push(`  - ${rel?.type || "related"}: ${rel?.relatedIssue?.identifier || "?"} ${String(rel?.relatedIssue?.title || "").slice(0, 60)}`);
+    }
+  }
+  if (issue.url) parts.push(issue.url);
+  return toolResult(parts.join("\n"));
+}
+
+async function handleDriveSearch(args: any, apiKey: string) {
+  const rawQuery = String(args?.query || "").trim().slice(0, 200);
+  if (!rawQuery) return toolResult("missing query", true);
+  const maxResults = Math.min(Math.max(parseInt(args?.max_results ?? "10", 10) || 10, 1), 20);
+  const isDriveQuery = /(^|\s)(name|fullText|mimeType|modifiedTime|trashed|parents|owners)\s*(contains|=|>|<)/.test(rawQuery);
+  const escaped = rawQuery.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const query = isDriveQuery ? rawQuery : `name contains '${escaped}' and trashed = false`;
+  const r = await callZoMcp(
+    "use_app_google_drive",
+    { tool_name: "google_drive-search-files", configured_props: { query, includeItemsFromAllDrives: true } },
+    apiKey,
+    14_000,
+  );
+  if (!r.ok) return toolResult(r.error, true);
+  return toolResult(r.text.slice(0, 6000).split("\n").slice(0, 6 + maxResults * 4).join("\n"));
+}
+
+const SERVICE_NAME_REGEX = /^[A-Za-z0-9._-]{1,80}$/;
+
+async function handleServiceLogs(args: any, apiKey: string) {
+  const service = String(args?.service || "").trim();
+  if (!SERVICE_NAME_REGEX.test(service)) return toolResult("invalid service name", true);
+  const lines = Math.min(Math.max(parseInt(args?.lines ?? "60", 10) || 60, 10), 200);
+  const suffix = args?.stream === "err" ? "_err" : "";
+  const cmd = `f=/dev/shm/${service}${suffix}.log; if [ -f "$f" ]; then tail -n ${lines} "$f" | tail -c 5000; else echo "no log file $f"; ls /dev/shm/*.log 2>/dev/null | head -30; fi`;
+  const r = await callZoMcp("bash", { cmd }, apiKey, 12_000);
+  if (!r.ok) return toolResult(r.error, true);
+  const m = r.text.match(/stdout='([\s\S]*?)', stderr=/);
+  const stdout = (m ? m[1].replace(/\\n/g, "\n") : r.text).trim();
+  return toolResult(stdout ? `${service}${suffix}.log (last ${lines} lines):\n${stdout}`.slice(0, 6000) : `Log for ${service} is empty.`);
+}
+
+const ZO_ASK_ENDPOINT = "https://api.zo.computer/zo/ask";
+
+async function handleAlaricQuery(args: any, apiKey: string) {
+  const question = String(args?.question || "").trim().slice(0, 2000);
+  if (!question) return toolResult("missing question", true);
+  const candidates = [...new Set([apiKey, process.env.ZO_ASK_TOKEN].filter((v): v is string => !!v))];
+  if (!candidates.length) return toolResult("ZO_API_KEY not configured", true);
+  const input = [
+    "You are handling a delegated question from Alaric Voice, the user's realtime voice assistant.",
+    "Answer in at most 4 short sentences, optimized to be read aloud. Lead with the answer.",
+    "This is a READ-ONLY request: do not create, edit, send, delete, deploy, or execute anything that changes state.",
+    "If answering would require a write or long-running job, instead say what you would do and what approval is needed.",
+    "",
+    `Question: ${question}`,
+  ].join("\n");
+  let lastFailure = "no token accepted";
+  for (const token of candidates) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 38_000);
+    try {
+      const resp = await fetch(ZO_ASK_ENDPOINT, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({ input }),
+        signal: ac.signal,
+      });
+      clearTimeout(timer);
+      const raw = await resp.text();
+      if (resp.status === 401 || resp.status === 403) {
+        lastFailure = `HTTP ${resp.status} ${raw.slice(0, 120)}`;
+        continue;
+      }
+      if (!resp.ok) return toolResult(`Alaric delegate failed: HTTP ${resp.status} ${raw.slice(0, 200)}`, true);
+      let parsed: any;
+      try { parsed = JSON.parse(raw); } catch { return toolResult(`Alaric delegate returned non-JSON: ${raw.slice(0, 200)}`, true); }
+      const output = typeof parsed?.output === "string" ? parsed.output : JSON.stringify(parsed?.output ?? parsed);
+      return toolResult(output.slice(0, 4000));
+    } catch (err: any) {
+      clearTimeout(timer);
+      if (err?.name === "AbortError") return toolResult("Alaric delegate timed out after 38s. Ask me to follow up by email for the full answer.", true);
+      return toolResult(`Alaric delegate error: ${err?.message || "unknown"}`, true);
+    }
+  }
+  return toolResult(`Alaric delegate failed: ${lastFailure}`, true);
+}
+
 async function handleCreateAgent(args: any, apiKey: string) {
   const name = String(args?.name || "").trim();
   const instructions = String(args?.instructions || "").trim();
@@ -1001,7 +1341,8 @@ const RETRYABLE_TOOLS = new Set<string>([
   "list_files", "list_personas", "list_user_services", "get_space_errors",
   "web_research", "find_similar_links", "maps_search", "read_webpage",
   "image_search", "save_webpage", "service_doctor", "gmail_search", "gmail_read",
-  "linear_project_updates",
+  "linear_project_updates", "factory_status", "factory_run_details", "github_status",
+  "linear_issue_details", "drive_search", "service_logs",
 ]);
 const RETRY_BACKOFF_MS = 400;
 
@@ -1054,6 +1395,13 @@ async function dispatchToolOnce(name: string, args: any, apiKey: string) {
     case "gmail_search": return await handleGmailSearch(args, apiKey);
     case "gmail_read": return await handleGmailRead(args, apiKey);
     case "linear_project_updates": return await handleLinearProjectUpdates(args);
+    case "factory_status": return await handleFactoryStatus(args);
+    case "factory_run_details": return await handleFactoryRunDetails(args);
+    case "github_status": return await handleGithubStatus(args, apiKey);
+    case "linear_issue_details": return await handleLinearIssueDetails(args);
+    case "drive_search": return await handleDriveSearch(args, apiKey);
+    case "service_logs": return await handleServiceLogs(args, apiKey);
+    case "alaric_query": return await handleAlaricQuery(args, apiKey);
     case "calendar_create_event": return await handleCalendarCreateEvent(args, apiKey);
     case "set_active_persona": return await handleSetActivePersona(args, apiKey);
     case "create_agent": return await handleCreateAgent(args, apiKey);
@@ -1153,7 +1501,7 @@ export default async (c: Context): Promise<Response> => {
       {
         protocolVersion: negotiatedVersion,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "alaric-mcp", version: "1.1.0" },
+        serverInfo: { name: "alaric-mcp", version: "1.2.0" },
       },
       {
         "Mcp-Session-Id": randomUUID(),
@@ -1176,7 +1524,14 @@ export default async (c: Context): Promise<Response> => {
     const apiKey = process.env.ZO_API_KEY;
     if (!apiKey) return jsonRpcOk(id, toolResult("ZO_API_KEY not configured", true));
     try {
-      const REALTIME_HARD_CAP_MS = toolName === "list_personas" ? 20_000 : 10_000;
+      const TOOL_HARD_CAPS_MS: Record<string, number> = {
+        list_personas: 20_000,
+        github_status: 16_000,
+        drive_search: 16_000,
+        service_logs: 14_000,
+        alaric_query: 40_000,
+      };
+      const REALTIME_HARD_CAP_MS = TOOL_HARD_CAPS_MS[toolName] ?? 10_000;
       const result = await Promise.race([
         dispatchTool(toolName, toolArgs, apiKey),
         new Promise<ReturnType<typeof toolResult>>((resolve) =>
