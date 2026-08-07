@@ -16,7 +16,7 @@ At a glance:
 
 1. **Speak naturally** using your microphone.
 2. **Your assistant listens and responds** in real time.
-3. **Zo tools help when needed** with memory, calendars, email, and files.
+3. **Zo tools help when needed** with memory, Gmail, Google Calendar, Linear projects, email, and files.
 4. **You hear the answer or receive the completed task.** Changes require your approval.
 
 The technical routes and tool packs are documented below for readers who need implementation details.
@@ -25,8 +25,8 @@ The technical routes and tool packs are documented below for readers who need im
 
 | Pack | Tools | `require_approval` |
 |------|-------|--------------------|
-| `essentials` | 19 — memory, calendar read, email/SMS send, file read, web search | per-tool: email/SMS writes `always`, reads `never` |
-| `power` | 28 — adds image search/gen, transcription, Gmail, calendar create | per-tool: writes `always`, reads `never` |
+| `essentials` | 21 — memory, Gmail read, Calendar read, Linear project updates, email/SMS send, file read, web search | per-tool: email/SMS writes `always`, reads `never` |
+| `power` | 28 — adds image search/gen, transcription, calendar create | per-tool: writes `always`, reads `never` |
 | `power_with_writes` | 36 — adds agent/automation/route writes, persona switch, publish | per-tool: writes `always`, reads `never` |
 
 ---
@@ -58,6 +58,7 @@ The `<slug>` is derived from `--name` (e.g. `--name "Aria"` → `aria-*`). Defau
   - `ZO_API_KEY` — used by `/api/<slug>-mcp` + `/api/<slug>-personas` to call upstream Zo MCP
   - `MCP_SHARED_TOKEN` — shared secret for OpenAI Realtime → MCP (`openssl rand -hex 32`). The env-var **name** is configurable; pass `--mcp-token-secret YOUR_NAME` to the deploy script to rename it (e.g. `ARIA_MCP_TOKEN`).
   - `OPENAI_API_KEY` — for Realtime sessions + OpenAI TTS backend
+  - `LINEAR_API_KEY` — read-only access to Linear project status and recent issue updates
   - `ELEVENLABS_API_KEY` — only if using ElevenLabs TTS backend (optional)
   - `MEMORY_DB_PATH` — *optional.* Absolute path to a SQLite memory backend exposing `facts`/`facts_fts`/`open_loops` tables for the `memory_search` + `list_open_loops` tools. Default `/home/workspace/.zo/memory/shared-facts.db`. If unset or the file doesn't exist, those tools degrade gracefully ("memory not configured") and the rest of the assistant works unchanged.
 

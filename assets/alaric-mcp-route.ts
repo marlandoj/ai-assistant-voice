@@ -15,6 +15,8 @@
 //                       tools are advertised but degrade gracefully with a
 //                       "memory not configured" response. Default:
 //                       /home/workspace/.zo/memory/shared-facts.db
+//   LINEAR_API_KEY    — Linear personal API key used by the read-only
+//                       linear_project_updates tool.
 //
 // JSON-RPC methods implemented:
 //   initialize, notifications/initialized, tools/list, tools/call, ping
@@ -360,6 +362,41 @@ const TOOL_DEFINITIONS: Array<{
       required: ["url"],
     },
   },
+  {
+    name: "gmail_search",
+    description: "Search the user's Gmail with a query (e.g. 'from:boss subject:invoice newer_than:7d').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Gmail search query." },
+        max_results: { type: "integer", description: "Max results (1-20). Default 10." },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "gmail_read",
+    description: "Read a specific Gmail message by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message_id: { type: "string", description: "Gmail message ID." },
+      },
+      required: ["message_id"],
+    },
+  },
+  {
+    name: "linear_project_updates",
+    description: "Read Linear project status, progress, teams, and recent issue updates. Optional query filters project names.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Optional project-name filter." },
+        max_projects: { type: "integer", description: "Max projects (1-20). Default 10." },
+        max_issues: { type: "integer", description: "Recent issues per project (1-10). Default 5." },
+      },
+    },
+  },
   // -------- POWER --------
   {
     name: "image_search",
@@ -425,29 +462,6 @@ const TOOL_DEFINITIONS: Array<{
         service_id: { type: "string", description: "User service ID." },
       },
       required: ["service_id"],
-    },
-  },
-  {
-    name: "gmail_search",
-    description: "Search the user's Gmail with a query (e.g. 'from:boss subject:invoice newer_than:7d').",
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Gmail search query." },
-        max_results: { type: "integer", description: "Max results (1-20). Default 10." },
-      },
-      required: ["query"],
-    },
-  },
-  {
-    name: "gmail_read",
-    description: "Read a specific Gmail message by ID.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        message_id: { type: "string", description: "Gmail message ID." },
-      },
-      required: ["message_id"],
     },
   },
   {
@@ -824,6 +838,99 @@ async function handleGmailRead(args: any, apiKey: string) {
   );
 }
 
+async function handleLinearProjectUpdates(args: any) {
+  const linearApiKey = process.env.LINEAR_API_KEY;
+  if (!linearApiKey) {
+    return toolResult("Linear is not configured. Add LINEAR_API_KEY in Zo Settings > Advanced > Secrets.", true);
+  }
+
+  const query = String(args?.query || "").trim().slice(0, 120).toLowerCase();
+  const maxProjects = Math.min(Math.max(parseInt(args?.max_projects ?? "10", 10) || 10, 1), 20);
+  const maxIssues = Math.min(Math.max(parseInt(args?.max_issues ?? "5", 10) || 5, 1), 10);
+  const graphql = `
+    query VoiceLinearProjectUpdates($projectLimit: Int!, $issueLimit: Int!) {
+      projects(first: $projectLimit) {
+        nodes {
+          name
+          url
+          updatedAt
+          progress
+          status { name }
+          teams { nodes { name } }
+          issues(first: $issueLimit) {
+            nodes {
+              identifier
+              title
+              updatedAt
+              state { name }
+              assignee { name }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const response = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: {
+      Authorization: linearApiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query: graphql,
+      variables: { projectLimit: 50, issueLimit: maxIssues },
+    }),
+  });
+
+  const raw = await response.text();
+  let payload: any;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return toolResult(`Linear returned a non-JSON response (HTTP ${response.status}).`, true);
+  }
+  if (!response.ok || payload?.errors?.length) {
+    const detail = payload?.errors?.[0]?.message || `HTTP ${response.status}`;
+    return toolResult(`Linear request failed: ${String(detail).slice(0, 300)}`, true);
+  }
+
+  const allProjects = Array.isArray(payload?.data?.projects?.nodes)
+    ? payload.data.projects.nodes
+    : [];
+  const projects = allProjects
+    .filter((project: any) => !query || String(project?.name || "").toLowerCase().includes(query))
+    .slice(0, maxProjects);
+  if (!projects.length) {
+    return toolResult(query ? `No Linear projects matched "${query}".` : "No Linear projects found.");
+  }
+
+  const formatDate = (value: unknown) => {
+    const date = new Date(String(value || ""));
+    return Number.isNaN(date.getTime()) ? "unknown date" : date.toISOString().slice(0, 10);
+  };
+  const lines = projects.map((project: any) => {
+    const status = project?.status?.name || "no status";
+    const progress = typeof project?.progress === "number"
+      ? `, ${Math.round(project.progress * 100)}% complete`
+      : "";
+    const teams = Array.isArray(project?.teams?.nodes)
+      ? project.teams.nodes.map((team: any) => team?.name).filter(Boolean).join(", ")
+      : "";
+    const issues = Array.isArray(project?.issues?.nodes) ? project.issues.nodes : [];
+    const issueLines = issues.slice(0, maxIssues).map((issue: any) => {
+      const assignee = issue?.assignee?.name ? `; ${issue.assignee.name}` : "";
+      return `  - ${issue?.identifier || "issue"}: ${issue?.title || "untitled"} [${issue?.state?.name || "no state"}; updated ${formatDate(issue?.updatedAt)}${assignee}]`;
+    });
+    return [
+      `• ${project?.name || "Unnamed project"} — ${status}${progress}; updated ${formatDate(project?.updatedAt)}${teams ? `; team ${teams}` : ""}`,
+      project?.url ? `  ${project.url}` : "",
+      ...issueLines,
+    ].filter(Boolean).join("\n");
+  });
+  return toolResult(`Linear project updates${query ? ` matching "${query}"` : ""}:\n${lines.join("\n")}`);
+}
+
 async function handleCreateAgent(args: any, apiKey: string) {
   const name = String(args?.name || "").trim();
   const instructions = String(args?.instructions || "").trim();
@@ -894,6 +1001,7 @@ const RETRYABLE_TOOLS = new Set<string>([
   "list_files", "list_personas", "list_user_services", "get_space_errors",
   "web_research", "find_similar_links", "maps_search", "read_webpage",
   "image_search", "save_webpage", "service_doctor", "gmail_search", "gmail_read",
+  "linear_project_updates",
 ]);
 const RETRY_BACKOFF_MS = 400;
 
@@ -945,6 +1053,7 @@ async function dispatchToolOnce(name: string, args: any, apiKey: string) {
     case "service_doctor": return await handleServiceDoctor(args, apiKey);
     case "gmail_search": return await handleGmailSearch(args, apiKey);
     case "gmail_read": return await handleGmailRead(args, apiKey);
+    case "linear_project_updates": return await handleLinearProjectUpdates(args);
     case "calendar_create_event": return await handleCalendarCreateEvent(args, apiKey);
     case "set_active_persona": return await handleSetActivePersona(args, apiKey);
     case "create_agent": return await handleCreateAgent(args, apiKey);

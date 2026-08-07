@@ -9,12 +9,13 @@ description: >
 compatibility: Created for Zo Computer
 metadata:
   author: marlandoj.zo.computer
-  version: 3.3.0
+  version: 3.4.0
   requires:
     - ZO_ASK_TOKEN (required — Zo access token for AI proxy, Settings > Advanced)
     - ZO_API_KEY (required — used by /api/<slug>-mcp to call api.zo.computer/mcp)
     - MCP_SHARED_TOKEN (required — shared secret authenticating OpenAI Realtime → /api/<slug>-mcp; env-var name is configurable via deploy flag --mcp-token-secret)
     - OPENAI_API_KEY (required for Realtime mode — GA token mint)
+    - LINEAR_API_KEY (required for read-only Linear project updates)
     - ELEVENLABS_API_KEY (optional — for ElevenLabs TTS backend)
     - MEMORY_DB_PATH (optional — absolute path to SQLite memory backend; default /home/workspace/.zo/memory/shared-facts.db; memory tools degrade gracefully if missing)
 ---
@@ -135,8 +136,8 @@ bun deploy-tts-endpoint.ts --deploy-all --backend edge
 
 | Pack | Tools | Use case |
 |---|---|---|
-| `essentials` | 19 read-only | Default. Calendar, mail read, search, memory recall, open-loops. |
-| `power` | 28 read/light-write | Adds richer search, file reads, agent listings. No destructive actions. |
+| `essentials` | 21 core tools | Default. Gmail, Calendar, Linear project updates, search, memory recall, and open-loops; email/SMS sends remain approval-gated. |
+| `power` | 28 read/light-write | Adds image tools, transcription, richer search, and calendar creation. No destructive actions. |
 | `power_with_writes` | 36 incl. writes | Full surface. Writes (`create_agent`, `edit_agent`, `create_automation`, `write_space_route`, `publish_site`, `send_email`, `send_sms`, etc.) require approval per call. |
 
 To switch packs, change the PWA's `pack` arg to `connectRealtime` (currently hard-coded to `"essentials"` at the call to `/api/realtime-session`).
@@ -233,7 +234,7 @@ bun ai-assistant-voice.ts speak "Hello." --voice ErXwobaYiN019PkySvjV
 - Full-screen mobile-friendly UI with push-to-talk and hands-free modes
 - Wake word activation ("Hey [name]") when tab is active
 - Classic mode: Speech → Zo proxy → AI response → TTS (full context + memory)
-- **Realtime Mode (Native MCP)**: GPT-Realtime-2 calls Zo tools directly via `/api/<slug>-mcp`
+- **Realtime Mode (Native MCP)**: GPT-Realtime-2 calls Zo tools directly via `/api/<slug>-mcp`. Default sessions can read Gmail, Google Calendar, and Linear project updates; Linear access is read-only and uses `LINEAR_API_KEY`.
 - Tool packs: choose `essentials` (read-only) up to `power_with_writes` (36 tools, approval-gated)
 - Persona selector — switch between any of your Zo personas mid-session
 - New session button — clear conversation history
