@@ -25,9 +25,9 @@ The technical routes and tool packs are documented below for readers who need im
 
 | Pack | Tools | `require_approval` |
 |------|-------|--------------------|
-| `essentials` | 21 — memory, Gmail read, Calendar read, Linear project updates, email/SMS send, file read, web search | per-tool: email/SMS writes `always`, reads `never` |
-| `power` | 28 — adds image search/gen, transcription, calendar create | per-tool: writes `always`, reads `never` |
-| `power_with_writes` | 36 — adds agent/automation/route writes, persona switch, publish | per-tool: writes `always`, reads `never` |
+| `essentials` | 28 — memory, Gmail read, Calendar read, Linear projects + issue detail, factory status + run details, GitHub status, Drive search, service logs, Alaric read-only delegate, email/SMS send, file read, web search | per-tool: email/SMS writes `always`, reads `never` |
+| `power` | 35 — adds image search/gen, transcription, calendar create | per-tool: writes `always`, reads `never` |
+| `power_with_writes` | 43 — adds agent/automation/route writes, persona switch, publish | per-tool: writes `always`, reads `never` |
 
 ---
 
@@ -41,7 +41,7 @@ The `<slug>` is derived from `--name` (e.g. `--name "Aria"` → `aria-*`). Defau
 | `/api/<slug>-ask` | api | Text-mode Zo Ask proxy (fallback for non-Realtime mode) |
 | `/api/<slug>-bootstrap` | api | HMAC session token issuer (24h TTL) |
 | `/api/realtime-session` | api | OpenAI Realtime session mint + MCP tool config |
-| `/api/<slug>-mcp` | api | JSON-RPC 2.0 MCP server, 36 tools, 3-tier auth |
+| `/api/<slug>-mcp` | api | JSON-RPC 2.0 MCP server, 43 tools, 3-tier auth |
 | `/api/<slug>-personas` | api | Dynamic persona catalog — `list_personas` MCP (HMAC + ETag) |
 | `<path>` | page | The React PWA |
 | `<path>/manifest` | api | PWA install manifest |
@@ -146,7 +146,7 @@ In **Realtime mode** (default), OpenAI handles audio synthesis directly via WebR
 Skills/ai-assistant-voice/
 ├── assets/
 │   ├── alaric-bootstrap-route.ts     # HMAC token issuer (template)
-│   ├── alaric-mcp-route.ts           # JSON-RPC MCP server, 36 tools (template)
+│   ├── alaric-mcp-route.ts           # JSON-RPC MCP server, 43 tools (template)
 │   ├── alaric-personas-route.ts      # Dynamic persona catalog via list_personas (template)
 │   ├── ai-ask-route.ts               # Text-mode Zo Ask proxy
 │   ├── realtime-session-route.ts     # OpenAI Realtime mint

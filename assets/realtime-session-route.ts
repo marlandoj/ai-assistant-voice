@@ -83,6 +83,8 @@ const TOOL_PACK_ESSENTIALS = [
   "workspace_search", "web_search", "list_files", "list_personas",
   "list_user_services", "get_space_errors", "web_research", "find_similar_links",
   "maps_search", "read_webpage",
+  "factory_status", "factory_run_details", "github_status", "linear_issue_details",
+  "drive_search", "service_logs", "alaric_query",
 ];
 const TOOL_PACK_POWER = [
   ...TOOL_PACK_ESSENTIALS,
@@ -136,6 +138,13 @@ function buildToolRoutingSuffix(pack: string): string {
     "• \"my personas\" / \"list personas\" → list_personas",
     "• \"my services\" / \"hosted services\" → list_user_services",
     "• \"any errors\" / \"site errors\" → get_space_errors",
+    "• \"what's the factory doing\" / build status / active builds / factory throughput → factory_status",
+    "• \"why did ZOU-X fail\" / details on one build or execution → factory_run_details",
+    "• PRs / CI / checks / repo activity → github_status",
+    "• a specific ticket like \"ZOU-1110\" (state, comments, blockers) → linear_issue_details",
+    "• \"find the doc/sheet X in Drive\" → drive_search",
+    "• \"logs for service X\" / \"why is service X failing\" → service_logs",
+    "• complex read-only questions no other tool covers (code, cross-system analysis, deep file questions) → alaric_query — first TELL the user it may take up to half a minute, then call it",
   ];
   if (pack === "power" || pack === "power_with_writes") {
     lines.push(

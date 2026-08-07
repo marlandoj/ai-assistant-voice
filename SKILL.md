@@ -4,7 +4,7 @@ description: >
   Full-screen voice AI PWA for any Zo persona, wired to OpenAI Realtime GA with
   **native MCP**. GPT-Realtime-2 calls your remote MCP server directly — no
   per-tool orchestrator hop. Three tool packs (essentials / power /
-  power_with_writes) expose up to 36 Zo tools with approval gating on writes.
+  power_with_writes) expose up to 43 Zo tools with approval gating on writes.
   Includes one-command installer for zo.space routes. Three TTS backends.
 compatibility: Created for Zo Computer
 metadata:
@@ -38,7 +38,7 @@ This skill implements a **native MCP pipeline** with OpenAI Realtime GA:
        │  Audio out         │  config + approval       │  api.zo.computer/mcp
        │                    │                          │
        ▼                    ▼                          ▼
-   Realtime GA API     Direct tool calls          36 Zo tools
+   Realtime GA API     Direct tool calls          43 Zo tools
    v1/realtime/calls   (no orchestrator hop)      in 3 packs
 ```
 
@@ -50,7 +50,7 @@ This skill implements a **native MCP pipeline** with OpenAI Realtime GA:
 | **MCP server** | `/api/<slug>-mcp` on zo.space | JSON-RPC 2.0 endpoint exposing Zo tools to OpenAI |
 | **Tool backend** | `https://api.zo.computer/mcp` | Upstream Zo tool execution |
 
-**Why native MCP?** OpenAI Realtime GA speaks MCP over HTTP directly. Removing the orchestrator hop cuts per-tool latency, lets us expose 36 tools instead of 11, and adds first-class approval gating for write operations.
+**Why native MCP?** OpenAI Realtime GA speaks MCP over HTTP directly. Removing the orchestrator hop cuts per-tool latency, lets us expose 43 tools instead of 11, and adds first-class approval gating for write operations.
 
 ---
 
@@ -136,9 +136,9 @@ bun deploy-tts-endpoint.ts --deploy-all --backend edge
 
 | Pack | Tools | Use case |
 |---|---|---|
-| `essentials` | 21 core tools | Default. Gmail, Calendar, Linear project updates, search, memory recall, and open-loops; email/SMS sends remain approval-gated. |
-| `power` | 28 read/light-write | Adds image tools, transcription, richer search, and calendar creation. No destructive actions. |
-| `power_with_writes` | 36 incl. writes | Full surface. Writes (`create_agent`, `edit_agent`, `create_automation`, `write_space_route`, `publish_site`, `send_email`, `send_sms`, etc.) require approval per call. |
+| `essentials` | 28 core tools | Default. Gmail, Calendar, Linear (projects + issue detail), factory status/run details, GitHub status, Drive search, service logs, Alaric read-only delegate, search, memory recall, and open-loops; email/SMS sends remain approval-gated. |
+| `power` | 35 read/light-write | Adds image tools, transcription, richer search, and calendar creation. No destructive actions. |
+| `power_with_writes` | 43 incl. writes | Full surface. Writes (`create_agent`, `edit_agent`, `create_automation`, `write_space_route`, `publish_site`, `send_email`, `send_sms`, etc.) require approval per call. |
 
 To switch packs, change the PWA's `pack` arg to `connectRealtime` (currently hard-coded to `"essentials"` at the call to `/api/realtime-session`).
 
@@ -186,7 +186,7 @@ v3.0 swaps the per-tool orchestrator hop for native MCP. The PWA no longer touch
 | | v2.2 (Orchestrator) | v3.0 (Native MCP) |
 |---|---|---|
 | Tool config | Inline `tools: [function...]` at session.update | Single `{type: "mcp", server_url}` reference |
-| Tool count | 11 (one per function definition) | Up to 36 via `allowed_tools` filter |
+| Tool count | 11 (one per function definition) | Up to 43 via `allowed_tools` filter |
 | Tool execution | Browser → `/api/<slug>-orchestrator` → Zo | OpenAI → `/api/<slug>-mcp` → Zo (no browser hop) |
 | PWA tool event | `response.function_call_arguments.done` | `response.output_item.added/done` w/ `item.type==='mcp_call'` |
 | Writes | Either always-on or omitted | Per-call approval via `require_approval` |
@@ -235,7 +235,7 @@ bun ai-assistant-voice.ts speak "Hello." --voice ErXwobaYiN019PkySvjV
 - Wake word activation ("Hey [name]") when tab is active
 - Classic mode: Speech → Zo proxy → AI response → TTS (full context + memory)
 - **Realtime Mode (Native MCP)**: GPT-Realtime-2 calls Zo tools directly via `/api/<slug>-mcp`. Default sessions can read Gmail, Google Calendar, and Linear project updates; Linear access is read-only and uses `LINEAR_API_KEY`.
-- Tool packs: choose `essentials` (read-only) up to `power_with_writes` (36 tools, approval-gated)
+- Tool packs: choose `essentials` (read-only) up to `power_with_writes` (43 tools, approval-gated)
 - Persona selector — switch between any of your Zo personas mid-session
 - New session button — clear conversation history
 - Falls back to browser Web Speech API if TTS is unavailable
@@ -275,3 +275,4 @@ Configs are saved to `~/.zo/voice/persona-voices.json`:
 - **v3.1.0**: Public-repo hardening. MCP shared-secret env var is configurable (`--mcp-token-secret`, default `MCP_SHARED_TOKEN`). Memory backend is pluggable via `MEMORY_DB_PATH` with graceful degradation. Architecture diagram cleanup. Header rename: `X-Alaric-Token` → `X-Mcp-Token`.
 - **v3.2.0**: Latency & naturalness tunings (from Bhargava/Together AI "Engineering voice agents" talk). Five enhancements in `realtime-session-route.ts` + `pwa-page.tsx`: (1) `audio.input.turn_detection.type = "semantic_vad"` + `gpt-4o-mini-transcribe` streaming input transcription — fixes talk-over and surfaces user turns; (2) barge-in via `interrupt_response` + `create_response`, with PWA resetting speaking state on `speech_started`; (3) thinker-talker back-channel — one brief spoken acknowledgment before known-slow tools only, fast tools stay silent (instruction-layer, no competing `response.create`); (4) `VOICE_DELIVERY_SUFFIX` — pronunciation hints (Zouroboros → "Zoo-ro-boros") + emotion/phone-call delivery appended to `instructions`; (5) latency observability — time-to-first-audio + per-tool-call duration logged in the PWA.
 - **v3.3.0**: Reliability hardening. Two resilience fixes: (1) per-tool MCP retry in `alaric-mcp-route.ts` — one bounded retry with 400ms backoff on transient upstream failures (HTTP 429/502/503/504 or timeout) for an allowlist of 21 read-only/idempotent tools; every mutating write (send_email, create_agent, write_space_route, run_bash_command, …) stays one-shot so a retry can never double-apply a side effect; (2) WebRTC auto-reconnect in `pwa-page.tsx` — `onconnectionstatechange` watches for `failed` (reconnect now) and `disconnected` (2.5s grace to self-heal first), then does one single-flight reconnect; an intentional hang-up cancels the pending reconnect so it always wins the race.
+- **v3.4.0**: Operator read parity v1 (server 1.2.0). Seven read-only tools added to `essentials`: `factory_status` + `factory_run_details` (Zouroboros Software Factory digest — unions execution records across the canonical state dir and all rotated `.runtime/factory-conveyor*` roots by execution_id), `github_status` (open PRs + CI runs via `gh`), `linear_issue_details` (issue by identifier with comments and relations), `drive_search` (Drive query with `includeItemsFromAllDrives`), `service_logs` (tail `/dev/shm/<service>[_err].log`), and `alaric_query` (read-only `/zo/ask` delegate with 401/403 token failover and a 40s hard cap). Per-tool realtime hard-cap map replaces the single 10s cap. Packs: essentials 28 / power 35 / power_with_writes 43. Writes unchanged and still approval-gated.
