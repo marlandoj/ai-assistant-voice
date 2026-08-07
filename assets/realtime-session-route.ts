@@ -78,7 +78,8 @@ function jsonError(
 // =========================================================================
 const TOOL_PACK_ESSENTIALS = [
   "list_open_loops", "memory_search", "list_agents", "list_automations",
-  "list_calendar_events", "send_email", "send_sms", "read_file",
+  "list_calendar_events", "gmail_search", "gmail_read", "linear_project_updates",
+  "send_email", "send_sms", "read_file",
   "workspace_search", "web_search", "list_files", "list_personas",
   "list_user_services", "get_space_errors", "web_research", "find_similar_links",
   "maps_search", "read_webpage",
@@ -87,7 +88,7 @@ const TOOL_PACK_POWER = [
   ...TOOL_PACK_ESSENTIALS,
   "image_search", "generate_image", "save_webpage",
   "transcribe_audio", "transcribe_video", "service_doctor",
-  "gmail_search", "gmail_read", "calendar_create_event",
+  "calendar_create_event",
 ];
 const TOOL_PACK_POWER_WITH_WRITES = [
   ...TOOL_PACK_POWER,
@@ -119,6 +120,9 @@ function buildToolRoutingSuffix(pack: string): string {
     "• \"my agents\" / \"list agents\" → list_agents",
     "• \"automations\" / \"scheduled tasks\" / \"cron\" → list_automations",
     "• \"calendar\" / \"schedule\" / \"upcoming events\" / \"agenda\" → list_calendar_events",
+    "• \"search my email\" / Gmail queries → gmail_search",
+    "• \"read email <id>\" → gmail_read",
+    "• \"Linear projects\" / project updates / roadmap status → linear_project_updates",
     "• \"email me\" / \"send me an email\" → send_email",
     "• \"text me\" / \"sms me\" → send_sms",
     "• \"read <file>\" / \"show me <path>\" → read_file",
@@ -141,8 +145,6 @@ function buildToolRoutingSuffix(pack: string): string {
       "• transcribe audio file → transcribe_audio",
       "• transcribe video file → transcribe_video",
       "• \"is service X healthy\" → service_doctor",
-      "• \"search my email\" / Gmail queries → gmail_search",
-      "• \"read email <id>\" → gmail_read",
       "• \"schedule X tomorrow at Y\" → calendar_create_event",
     );
   }
