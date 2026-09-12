@@ -1339,8 +1339,8 @@ async function handleAlaricQuery(args: any, apiKey: string) {
         body: JSON.stringify({ input }),
         signal: ac.signal,
       });
-      clearTimeout(timer);
       const raw = await resp.text();
+      clearTimeout(timer);
       if (resp.status === 401 || resp.status === 403) {
         lastFailure = `HTTP ${resp.status} ${raw.slice(0, 120)}`;
         continue;
