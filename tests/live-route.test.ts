@@ -34,7 +34,7 @@ beforeAll(async()=>{
     if(init?.method==="HEAD")return new Response(null,{status:init.headers.Cookie.includes("valid")&&!init.headers.Cookie.includes("invalid")?200:302});
     if(url.endsWith("/mcp")||url.endsWith("-mcp")){
       const body=JSON.parse(init.body);
-      if(body.method==="tools/list")return Response.json({result:{tools:["memory_search","send_sms","calendar_create_event","bash"].map(name=>({name,description:name,inputSchema:{type:"object",properties:{}}}))}});
+      if(body.method==="tools/list")return Response.json({result:{tools:["memory_search","rag_search","rag_list_collections","workspace_search","send_sms","calendar_create_event","bash"].map(name=>({name,description:name,inputSchema:{type:"object",properties:{}}}))}});
       if(body.params.name==="list_personas")return Response.json({result:{content:[{text:JSON.stringify([{id:"persona",name:"Test Persona",prompt:"Be concise."}])}]}});
       if(body.params.name==="send_sms"){writes++;if(mode==="uncertain")throw new Error("lost receipt");}
       if(mode==="timeout_receipt")return Response.json({result:{isError:false,content:[{type:"text",text:"That's taking longer than real-time allows. I'll send the result via SMS once it completes — ask me to follow up."}]}});
@@ -46,9 +46,10 @@ beforeAll(async()=>{
     if(url.endsWith("/responses")){
       models++;const body=JSON.parse(init.body);
       expect(body.store).toBe(false);expect(body.tools.some((tool:any)=>tool.name==="bash")).toBe(false);
+      if(mode==="rag")expect(body.tools.some((tool:any)=>tool.name==="rag_search")).toBe(true);
       if(gate)await new Promise<void>(resolve=>{unblock=resolve;});
       const done=body.input.some((item:any)=>item.type==="function_call_output");
-      const output=mode==="plain"||done?[{type:"message",content:[{type:"output_text",text:"Verified answer."}]}]:[{type:"function_call",call_id:"call_1",name:mode==="forbidden"?"bash":mode==="read"?"memory_search":"send_sms",arguments:JSON.stringify(mode==="read"?{query:"preference"}:{message:"Test only"})}];
+      const output=mode==="plain"||done?[{type:"message",content:[{type:"output_text",text:"Verified answer."}]}]:[{type:"function_call",call_id:"call_1",name:mode==="forbidden"?"bash":mode==="rag"?"rag_search":mode==="read"?"memory_search":"send_sms",arguments:JSON.stringify(mode==="read"||mode==="rag"?{query:"preference"}:{message:"Test only"})}];
       return Response.json({status:"completed",output});
     }
     throw new Error(`Unexpected fixture URL ${url}`);
@@ -75,6 +76,12 @@ test("read delegation uses tools and duplicate delegation does not repeat",async
   const request={action:"delegate",session_id,delegation_id:"item_read",offset_ms:1000,fragments:fragment("Recall my preference")};
   const response=await call(request,{cookie});expect(response.data.status).toBe("completed");expect(response.data.result).toBe("Verified answer.");
   const before=models;expect((await call(request,{cookie})).data.status).toBe("completed");expect(models).toBe(before);
+});
+test("RAG delegation reaches the gateway without write approval",async()=>{
+  mode="rag";const cookie="zo_session=valid-rag",session_id=await create(cookie);
+  const before=writes;
+  const response=await call({action:"delegate",session_id,delegation_id:"item_rag",offset_ms:1000,fragments:fragment("Search the knowledge corpus")},{cookie});
+  expect(response.data.status).toBe("completed");expect(response.data.result).toBe("Verified answer.");expect(writes).toBe(before);
 });
 test("write approval requires exact id and executes once under concurrent requests",async()=>{
   mode="write";const cookie="zo_session=valid-write",session_id=await create(cookie);
