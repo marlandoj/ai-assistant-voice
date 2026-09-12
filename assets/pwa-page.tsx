@@ -30,6 +30,22 @@ const ELEVEN_VOICES: Record<string, string> = {
   Bella: "EXAVITQu4vr4xnSDxMaL",
   Grace: "Yko7PKHZNXotIFUBG7I9",
 };
+const LIVE_VOICES = [
+  { id: "marin", name: "Marin (default)", group: "Default" },
+  { id: "vesper", name: "Vesper · British masculine", group: "English" },
+  { id: "meridian", name: "Meridian · North American masculine", group: "English" },
+  { id: "quartz", name: "Quartz · Australian feminine", group: "English" },
+  { id: "ripple", name: "Ripple · Australian masculine", group: "English" },
+  { id: "willow", name: "Willow · Irish feminine", group: "English" },
+  { id: "stone", name: "Stone · Irish masculine", group: "English" },
+  { id: "gleam", name: "Gleam · North American feminine", group: "English" },
+  { id: "beacon", name: "Beacon · Filipino masculine", group: "English" },
+  { id: "delta", name: "Delta · Southern U.S. feminine", group: "English" },
+  { id: "cinder", name: "Cinder · Southern U.S. masculine", group: "English" },
+  { id: "bossa", name: "Bossa · Brazilian feminine", group: "Portuguese" },
+  { id: "tempo", name: "Tempo · Brazilian masculine", group: "Portuguese" },
+];
+
 const RT_VOICES = ["echo", "shimmer", "alloy", "ash", "coral", "sage", "verse"];
 
 // Slow tools (median > 5s) get a one-line filler so the user hears something while we wait.
@@ -210,13 +226,33 @@ const ANIMATIONS = `
 @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
 `;
 
-function SettingsPanel({ liveMode, realtimeMode, rtVoice, personaId, elevenVoice, voiceQuality, theme, personas, onSave, onClose, t }: {
+function SettingsPanel({ liveMode, liveVoice, liveStyle, realtimeMode, rtVoice, personaId, elevenVoice, voiceQuality, theme, personas, onSave, onClose, t }: {
   liveMode: boolean;
+  liveVoice: string; liveStyle: string;
   realtimeMode: boolean; rtVoice: string; personaId: string; elevenVoice: string; voiceQuality: string; theme: Theme; personas: PersonaOption[];
-  onSave: (rt: boolean, rtV: string, persona: string, elv: string, q: string, live: boolean) => void; onClose: () => void; t: Record<string, string>;
+  onSave: (rt: boolean, rtV: string, persona: string, elv: string, q: string, live: boolean, liveV: string, style: string) => Promise<void>; onClose: () => void; t: Record<string, string>;
 }) {
   const [rt, setRt] = useState(realtimeMode);
   const [live, setLive] = useState(liveMode);
+  const [liveV, setLiveV] = useState(liveVoice);
+  const [style, setStyle] = useState(liveStyle);
+  const [voices, setVoices] = useState(LIVE_VOICES);
+  const [catalogError, setCatalogError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 12000);
+    void authedFetch(LIVE_ENDPOINT, { method: "POST", credentials: "same-origin", body: JSON.stringify({ action: "voices" }), signal: controller.signal }).then(async response => {
+      if (!response.ok) throw new Error("catalog_unavailable");
+      const data = await response.json();
+      if (!Array.isArray(data.voices) || !data.voices.every((v: any) => typeof v.id === "string" && typeof v.name === "string" && typeof v.group === "string")) throw new Error("catalog_invalid");
+      if (!cancelled) { setVoices(data.voices); setCatalogError(""); }
+    }).catch(() => { if (!cancelled) setCatalogError("Built-in voices shown. Custom voices could not be checked; reopen Settings to retry."); }).finally(() => clearTimeout(timer));
+    return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
+  }, [live]);
   const [rtV, setRtV] = useState(rtVoice);
   const [persona, setPersona] = useState(personaId);
   const [elv, setElv] = useState(elevenVoice);
@@ -277,16 +313,33 @@ function SettingsPanel({ liveMode, realtimeMode, rtVoice, personaId, elevenVoice
 
         {rt && (
           <div style={{ marginBottom:20 }}>
-            <label style={lbl}>AI Persona ({personas.length}) — voice mapped per persona</label>
+            <label style={lbl}>AI Persona ({personas.length}){!live && " — voice mapped per persona"}</label>
             <select value={persona} onChange={e => setPersona(e.target.value)} style={sel}>
               {Object.keys(grouped).sort().map(g => (
                 <optgroup key={g} label={g}>
-                  {grouped[g].map(p => <option key={p.id} value={p.id}>{p.name}{p.voice ? ` — ${p.voice}` : ''}</option>)}
+                  {grouped[g].map(p => <option key={p.id} value={p.id}>{p.name}{!live && p.voice ? ` — ${p.voice}` : ''}</option>)}
                 </optgroup>
               ))}
             </select>
           </div>
         )}
+
+        {rt && live && <div style={{ marginBottom: 24 }}>
+          <label htmlFor="live-voice" style={lbl}>GPT-Live voice</label>
+          <select id="live-voice" value={liveV} onChange={e => setLiveV(e.target.value)} style={{ ...sel, minHeight: 44 }} aria-describedby="live-voice-help">
+            {!voices.some(v => v.id === liveV) && <option value={liveV} disabled>Saved voice unavailable. Choose another.</option>}
+            {Array.from(new Set(voices.map(v => v.group))).map(group => <optgroup key={group} label={group}>
+              {voices.filter(v => v.group === group).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </optgroup>)}
+          </select>
+          <p id="live-voice-help" style={{ fontSize: 12, color: t.fgMuted, lineHeight: 1.5 }}>Voice and speaking style apply to your next conversation. Your current call keeps its voice.</p>
+          {catalogError && <p role="status" style={{ fontSize: 12, color: t.warn }}>{catalogError}</p>}
+          <label htmlFor="live-style" style={{ ...lbl, marginTop: 20 }}>Speaking style</label>
+          <select id="live-style" value={style} onChange={e => setStyle(e.target.value)} style={{ ...sel, minHeight: 44 }}>
+            <option value="natural">Natural</option><option value="calm">Calm and measured</option><option value="warm">Warm and friendly</option><option value="brisk">Brisk and clear</option>
+          </select>
+          <p style={{ fontSize: 12, color: t.fgMuted, lineHeight: 1.5 }}>Guides delivery while keeping the selected voice and persona.</p>
+        </div>}
 
         {!rt && (
           <>
@@ -312,8 +365,9 @@ function SettingsPanel({ liveMode, realtimeMode, rtVoice, personaId, elevenVoice
         )}
 
         <div style={{ height:1,background:t.surface2,margin:"0 0 20px" }} />
-        <button onClick={() => { onSave(rt,rtV,persona,elv,q,live); setTimeout(onClose,300); }} style={{ width:"100%",padding:13,background:t.accent,color:"#fff",fontSize:15,fontWeight:600,border:"none",borderRadius:10,cursor:"pointer",fontFamily:"inherit" }}>
-          Save Settings
+        {saveError && <p role="alert" style={{ color: t.warn }}>{saveError}</p>}
+        <button disabled={saving || (live && rt && !voices.some(v => v.id === liveV))} onClick={async () => { setSaving(true); setSaveError(""); try { await onSave(rt,rtV,persona,elv,q,live,liveV,style); onClose(); } catch { setSaveError("Settings could not be saved. Please try again."); } finally { setSaving(false); } }} style={{ width:"100%",padding:13,background:t.accent,color:"#fff",fontSize:15,fontWeight:600,border:"none",borderRadius:10,cursor:"pointer",fontFamily:"inherit" }}>
+          {saving ? "Saving…" : "Save Settings"}
         </button>
         <div style={{ marginTop:20,padding:16,background:t.surface2,borderRadius:12,border:`1px solid ${t.border}` }}>
           <p style={{ fontSize:12,color:t.fgFaint,lineHeight:1.7,margin:0 }}>
@@ -375,6 +429,11 @@ const ARCHIVE_LS = "alaric_archive_v1";
 
 export default function AlaricVoicePWA() {
   const [liveMode,setLiveMode] = useState(()=>localStorage.getItem("alaric_live_mode")==="true");
+  const [liveVoice, setLiveVoice] = useState(() => localStorage.getItem("alaric_live_voice") || "marin");
+  const [liveStyle, setLiveStyle] = useState(() => {
+    const saved = localStorage.getItem("alaric_live_style") || "natural";
+    return ["natural", "calm", "warm", "brisk"].includes(saved) ? saved : "natural";
+  });
   const [liveTasks,setLiveTasks] = useState<LiveTask[]>([]);
   const [liveBusy,setLiveBusy] = useState(false);
   const [liveUsage,setLiveUsage] = useState(0);
@@ -761,7 +820,7 @@ export default function AlaricVoicePWA() {
   async function liveRequest(body: Record<string, unknown>) {
     const response = await authedFetch(LIVE_ENDPOINT, { method:"POST", credentials:"same-origin", body:JSON.stringify({session_id:liveRef.current.id,...body}) });
     const data = await response.json();
-    if(!response.ok) throw new Error(data.error||`Live request ${response.status}`);
+    if(!response.ok) throw new Error(data.message||data.error||`Live request ${response.status}`);
     return data;
   }
 
@@ -908,7 +967,7 @@ export default function AlaricVoicePWA() {
         pc.addEventListener("icegatheringstatechange",check);
       });
       if(generation!==state.generation)return;
-      const result=await liveRequest({action:"create",request_id:crypto.randomUUID(),persona_id:personaId,sdp:pc.localDescription?.sdp,resume_session_id:state.id||undefined});
+      const result=await liveRequest({action:"create",request_id:crypto.randomUUID(),persona_id:personaId,voice:liveVoice,speaking_style:liveStyle,sdp:pc.localDescription?.sdp,resume_session_id:state.id||undefined});
       state.previous=state.id;state.id=result.session_id;
       sessionStorage.setItem("alaric_live_session",state.id);
       state.fragments=result.fragments||[];state.seen.clear();
@@ -1162,8 +1221,12 @@ export default function AlaricVoicePWA() {
     if(!realtimeMode)showToast("New session started.","success",setToast_);
   },[realtimeMode,rtConnected,messages.length,archiveCurrent]);
 
-  const handleSave=async(rt:boolean,rtV:string,persona:string,elv:string,q:string,live:boolean)=>{
-    if(liveRef.current.ready||liveRef.current.busy)await endLive();
+  const handleSave=async(rt:boolean,rtV:string,persona:string,elv:string,q:string,live:boolean,liveV:string,style:string)=>{
+    const keepLive = liveMode && live && rt && persona === personaId && q !== "browser";
+    const livePreferencesChanged = liveV !== liveVoice || style !== liveStyle;
+    if((liveRef.current.ready||liveRef.current.busy)&&!keepLive)await endLive();
+    setLiveVoice(liveV);setLiveStyle(style);
+    localStorage.setItem("alaric_live_voice",liveV);localStorage.setItem("alaric_live_style",style);
     if(live)stopWake();
     if(persona!==personaId){liveRef.current.id="";liveRef.current.previous="";liveRef.current.fragments=[];setLiveTasks([]);sessionStorage.removeItem("alaric_live_session");}
     if(live!==liveMode)disconnectRealtime();
@@ -1175,7 +1238,7 @@ export default function AlaricVoicePWA() {
     localStorage.setItem("alaric_rt_mode",String(rt));localStorage.setItem("alaric_rt_voice",rtV);
     localStorage.setItem("alaric_persona_id",persona);localStorage.setItem("alaric_voice_name",elv);
     localStorage.setItem("alaric_voice_quality", q);
-    showToast("Settings saved.","success",setToast_);
+    showToast(live&&livePreferencesChanged?"Settings saved. Voice and style apply to your next conversation.":"Settings saved.","success",setToast_);
   };
 
   const toggleTheme = () => {
@@ -1415,7 +1478,7 @@ export default function AlaricVoicePWA() {
         </div>
       )}
 
-      {showSettings&&<SettingsPanel liveMode={liveMode} realtimeMode={realtimeMode} rtVoice={rtVoice} personaId={personaId} elevenVoice={elevenVoice} voiceQuality={voiceQuality} theme={theme} personas={personas} onSave={handleSave} onClose={()=>setShowSettings(false)} t={t} />}
+      {showSettings&&<SettingsPanel liveMode={liveMode} liveVoice={liveVoice} liveStyle={liveStyle} realtimeMode={realtimeMode} rtVoice={rtVoice} personaId={personaId} elevenVoice={elevenVoice} voiceQuality={voiceQuality} theme={theme} personas={personas} onSave={handleSave} onClose={()=>setShowSettings(false)} t={t} />}
       {showArchive&&<ArchiveDrawer entries={archive} currentId={convId} theme={theme} t={t} onLoad={loadArchiveEntry} onDelete={deleteArchiveEntry} onExport={exportEntry} onClose={()=>setShowArchive(false)} />}
     </div>
   );

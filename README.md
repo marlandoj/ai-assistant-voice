@@ -246,6 +246,10 @@ The persona dropdown is populated **dynamically** — `/api/<slug>-personas` cal
 
 ---
 
+## GPT-Live voice preferences
+
+GPT-Live has a dedicated voice selector and independent speaking-style preference. Choices are saved per browser and apply to the next conversation without ending the current call. See [GPT-Live voices](docs/live-voices.md) for the supported built-in catalog and operator configuration of approved OpenAI custom voices. Classic external TTS and Realtime voice mapping remain separate.
+
 ## License
 
 MIT

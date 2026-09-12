@@ -15,6 +15,38 @@ let database: Database | undefined;
 const active = new Map<string, AbortController>();
 const ownerCookies = new Map<string, number>();
 
+const LIVE_VOICES = [
+  { id: "marin", name: "Marin (default)", group: "Default" },
+  { id: "vesper", name: "Vesper · British masculine", group: "English" },
+  { id: "meridian", name: "Meridian · North American masculine", group: "English" },
+  { id: "quartz", name: "Quartz · Australian feminine", group: "English" },
+  { id: "ripple", name: "Ripple · Australian masculine", group: "English" },
+  { id: "willow", name: "Willow · Irish feminine", group: "English" },
+  { id: "stone", name: "Stone · Irish masculine", group: "English" },
+  { id: "gleam", name: "Gleam · North American feminine", group: "English" },
+  { id: "beacon", name: "Beacon · Filipino masculine", group: "English" },
+  { id: "delta", name: "Delta · Southern U.S. feminine", group: "English" },
+  { id: "cinder", name: "Cinder · Southern U.S. masculine", group: "English" },
+  { id: "bossa", name: "Bossa · Brazilian feminine", group: "Portuguese" },
+  { id: "tempo", name: "Tempo · Brazilian masculine", group: "Portuguese" },
+];
+const LIVE_STYLES: Record<string, string> = {
+  natural: "Use a natural, conversational delivery.",
+  calm: "Use a calm, measured delivery with gentle pacing.",
+  warm: "Use a warm, friendly delivery without excessive enthusiasm.",
+  brisk: "Use a brisk, clear delivery while keeping words easy to understand.",
+};
+function customVoices(): { id: string; name: string; group: string }[] {
+  const raw = process.env.VOICE_LIVE_CUSTOM_VOICES;
+  if (!raw) return [];
+  const entries = JSON.parse(raw);
+  if (!Array.isArray(entries) || entries.length > 20 || entries.some(v =>
+    !v || v.approved !== true || typeof v.id !== "string" || !/^voice_[a-zA-Z0-9_-]{1,120}$/.test(v.id) ||
+    typeof v.name !== "string" || !v.name.trim() || v.name.length > 80
+  ) || new Set(entries.map(v => v.id)).size !== entries.length) throw new Error("custom_voice_catalog_invalid");
+  return entries.map(v => ({ id: v.id, name: v.name.trim(), group: "Approved custom voices" }));
+}
+
 function db() {
   if (!database) {
     const path = process.env.VOICE_LIVE_DB_PATH || "/home/workspace/.zo/voice/{{ASSISTANT_SLUG}}-live.sqlite";
@@ -177,8 +209,13 @@ export default async function liveRoute(c: Context): Promise<Response> {
     const raw = await c.req.text();
     if (raw.length > 180000) return reply({ error: "request_too_large" }, 413);
     const body = JSON.parse(raw);
+    if (body.action === "voices") return reply({ voices: [...LIVE_VOICES, ...customVoices()], default_voice: "marin" });
     if (body.action === "create") {
       if (typeof body.request_id !== "string" || !/^[a-zA-Z0-9_-]{8,80}$/.test(body.request_id) || typeof body.sdp !== "string" || !body.sdp.startsWith("v=0") || body.sdp.length > 64000) return reply({ error: "invalid_session_request" }, 400);
+      const voice = body.voice === undefined ? "marin" : body.voice;
+      const style = body.speaking_style === undefined ? "natural" : body.speaking_style;
+      if (typeof voice !== "string" || (!LIVE_VOICES.some(v => v.id === voice) && !customVoices().some(v => v.id === voice))) return reply({ error: "voice_unavailable", message: "Choose an available GPT-Live voice in Settings, then start again." }, 400);
+      if (typeof style !== "string" || !Object.hasOwn(LIVE_STYLES, style)) return reply({ error: "invalid_speaking_style" }, 400);
       const id = `session_${digest(owner + body.request_id)}`;
       if (get(id)) return reply({ error: "session_creation_already_attempted", session_id: id }, 409);
       const count = db().query("SELECT count(*) AS n FROM live_records WHERE owner=? AND kind='session' AND updated>?").get(owner, Date.now() - 60000) as { n: number };
@@ -198,7 +235,7 @@ export default async function liveRoute(c: Context): Promise<Response> {
         value.prompt = selected.prompt; value.name = selected.name;
         const response = await fetch("https://api.openai.com/v1/live/sessions", {
           method: "POST", headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ session: { model: "gpt-live-1", instructions: `You are ${selected.name}. Speak naturally and concisely. Delegate factual, memory, reasoning and tool requests to the backend. Do not invent results or claim actions completed. Writes require the on-screen approval. Speech interruptions are not action cancellations. Use the Cancel task control to cancel. Pronounce Zouroboros as Zoo-ro-boros.`, input: value.fragments.length ? [{ type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify({ prior_conversation: value.fragments, prior_tasks: value.previous }).slice(-20000) }] }] : [], delegation: { type: "client" }, store: false }, transport: { type: "webrtc", sdp: body.sdp } }), signal: AbortSignal.timeout(30000),
+          body: JSON.stringify({ session: { model: "gpt-live-1", audio: { output: { voice: voice.startsWith("voice_") ? { id: voice } : voice } }, instructions: `You are ${selected.name}. Speak naturally and concisely. ${LIVE_STYLES[style]} Delegate factual, memory, reasoning and tool requests to the backend. Do not invent results or claim actions completed. Writes require the on-screen approval. Speech interruptions are not action cancellations. Use the Cancel task control to cancel. Pronounce Zouroboros as Zoo-ro-boros.`, input: value.fragments.length ? [{ type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify({ prior_conversation: value.fragments, prior_tasks: value.previous }).slice(-20000) }] }] : [], delegation: { type: "client" }, store: false }, transport: { type: "webrtc", sdp: body.sdp } }), signal: AbortSignal.timeout(30000),
         });
         if (!response.ok) throw new Error(`live_session_${response.status}`);
         const result = await response.json() as any;
