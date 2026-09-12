@@ -10,6 +10,22 @@ Built as a Progressive Web App (PWA) deployed to your `zo.space`. Works with any
 
 ## Architecture
 
+### Optional GPT-Live mode
+
+In Settings, choose **GPT-Live**, save, and select **Start conversation**. Realtime remains the default; Classic remains available. GPT-Live uses `gpt-live-1` over WebRTC with client delegation to the authenticated `/api/<slug>-live` route. The backend uses `gpt-5.6-luna` by default (`VOICE_LIVE_BACKEND_MODEL` overrides it), the selected persona prompt, transcript timestamps, prior task records and the existing MCP gateway.
+
+Live requires an owner-signed-in private Zo page. The API verifies the browser cookie against that fixed private page in addition to the existing HMAC token; an Origin header or bootstrap token alone cannot authorize a Live session. Requests use the private page's same-origin endpoint. If Zo cannot verify the session cookie, access fails closed.
+
+The initial tool scope includes memory, open loops, calendar and Gmail reads, Linear, GitHub, Factory, Drive search and web research. Calendar creation and SMS require an on-screen approval of the exact arguments. Email sending, unrestricted agent delegation, shell/file access and deployment tools are intentionally unavailable in this mode. Realtime retains its existing tool packs.
+
+Task and approval records persist locally at `/home/workspace/.zo/voice/<slug>-live.sqlite` (`VOICE_LIVE_DB_PATH` overrides this). Protect this file: it contains private transcripts, persona prompts and task results. OpenAI audio recording storage is disabled. Each write is claimed atomically before execution; an uncertain result cannot be automatically replayed. Spoken corrections expire outstanding approvals. The Cancel task button stops pending work; an action already executing may still finish. Reconnecting preserves prior context and task outcomes, and cancels unexecuted approvals instead of replaying them.
+
+Use **End conversation** to disconnect. Live waits briefly for final usage before releasing the connection and also requests server-side hangup. Sessions end after 30 minutes or five minutes without user speech. Connected voice time is $0.05/minute, plus backend usage; session creation has a minimum initialization charge. Human audio quality and interruption behavior need a real microphone evaluation.
+
+Validation: `bun test tests/live-route.test.ts` and `tsc --noEmit`. The checked-in TypeScript configuration resolves dependencies from the Zo Space installation without modifying that installation.
+
+Protocol references: [WebRTC](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live), [client delegation](https://developers.openai.com/api/docs/guides/live-delegation), [session lifecycle](https://developers.openai.com/api/docs/guides/live-conversations).
+
 ![How AI Assistant Voice turns a conversation into a helpful action](docs/alaric-voice-v3-architecture.png)
 
 At a glance:
@@ -43,6 +59,7 @@ The `<slug>` is derived from `--name` (e.g. `--name "Aria"` → `aria-*`). Defau
 | `/api/realtime-session` | api | OpenAI Realtime session mint + MCP tool config |
 | `/api/<slug>-mcp` | api | JSON-RPC 2.0 MCP server, 43 tools, 3-tier auth |
 | `/api/<slug>-personas` | api | Dynamic persona catalog — `list_personas` MCP (HMAC + ETag) |
+| `/api/<slug>-live` | api | Optional GPT-Live session, delegation, approvals and durable task state |
 | `<path>` | page | The React PWA |
 | `<path>/manifest` | api | PWA install manifest |
 | `<path>/sw` | api | Service worker (offline shell) |
@@ -150,6 +167,7 @@ Skills/ai-assistant-voice/
 │   ├── alaric-personas-route.ts      # Dynamic persona catalog via list_personas (template)
 │   ├── ai-ask-route.ts               # Text-mode Zo Ask proxy
 │   ├── realtime-session-route.ts     # OpenAI Realtime mint
+│   ├── live-route.ts                 # GPT-Live sessions and approved delegation
 │   ├── pwa-page.tsx                  # React PWA (placeholderized)
 │   ├── manifest-route.ts             # PWA manifest
 │   ├── sw-route.ts                   # Service worker
