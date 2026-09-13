@@ -2,7 +2,7 @@
 
 ![Zo Voice AI Assistant](docs/hero-banner.png)
 
-A voice interface for [Zo Computer](https://zo.computer) personas using **OpenAI Realtime API (GA, `gpt-realtime-2`)** with native MCP tool integration. Speak to any persona, hear it speak back, and let it call your Zo tools directly — all keys stay server-side.
+A voice interface for [Zo Computer](https://zo.computer) personas with **GPT-Live-1**, **OpenAI Realtime**, and **Classic speech → text → speech** modes. Speak or type to your assistant, retrieve saved memories and workspace knowledge, and review supported actions before execution.
 
 Built as a Progressive Web App (PWA) deployed to your `zo.space`. Works with any of your Zo personas — pick from the dropdown at runtime.
 
@@ -10,25 +10,87 @@ Built as a Progressive Web App (PWA) deployed to your `zo.space`. Works with any
 
 ## Architecture
 
-### Optional GPT-Live mode
+### Choose a conversation mode
+
+| Mode | Conversation | Tool execution |
+|---|---|---|
+| **Realtime** (default) | OpenAI Realtime over WebRTC | OpenAI calls the MCP gateway directly; the selected tool pack controls availability and write approvals. |
+| **GPT-Live** (opt-in) | `gpt-live-1` over WebRTC | Client delegation sends work to the authenticated Live backend, which uses a text reasoning model and a restricted MCP tool list. |
+| **Classic** | Browser speech recognition or typed text → Zo Ask → TTS | Zo Ask handles the request; ElevenLabs, OpenAI TTS, Edge or browser speech plays the reply. |
+
+### Start GPT-Live-1
 
 In Settings, choose **GPT-Live**, save, and select **Start conversation**. Realtime remains the default; Classic remains available. GPT-Live uses `gpt-live-1` over WebRTC with client delegation to the authenticated `/api/<slug>-live` route. The backend uses `gpt-5.6-luna` by default (`VOICE_LIVE_BACKEND_MODEL` overrides it), the selected persona prompt, transcript timestamps, prior task records and the existing MCP gateway.
+
+Choose from 13 built-in voices (Marin by default) and four delivery styles: Natural, Calm and measured, Warm and friendly, or Brisk and clear. Voice/style preferences persist in this browser and apply to the next conversation; saving only those preferences keeps an active call running. Changing mode or persona ends it. Approved OpenAI custom voices can be configured by the operator; third-party voice IDs and voice packs cannot be imported. See [voice configuration](docs/live-voices.md).
+
+### GPT-Live tool-calling workflow
+
+```mermaid
+sequenceDiagram
+    participant U as User / PWA
+    participant L as GPT-Live-1
+    participant B as Live backend
+    participant R as Responses reasoning model
+    participant M as MCP gateway
+    U->>L: Speech over WebRTC
+    L-->>U: session.delegation.created (target: client)
+    U->>B: delegate + transcript fragments + delegation ID
+    B->>M: tools/list
+    B->>R: Persona, context and allowlisted tools
+    R-->>B: Function call with arguments
+    alt Read tool
+        B->>M: tools/call
+        M-->>B: Result or explicit error
+        B->>R: function_call_output
+        R-->>B: Spoken-answer text
+    else Allowed write
+        B-->>U: Pending approval with exact arguments
+        U->>B: Approve or reject on screen
+        opt Approved, current and unused
+            B->>M: Atomically claimed, one-shot tools/call
+            M-->>B: Action receipt or unconfirmed outcome
+        end
+    end
+    B-->>U: Task status and result
+    U->>L: session.commentary.append
+    L-->>U: Spoken result
+```
+
+The browser forwards timestamped transcript fragments; the backend owns tool selection, execution and task state. It filters `tools/list` through a server allowlist, validates each function name again before execution, disables parallel calls, and bounds reasoning to six steps and a 90-second run deadline. Repeated delegation IDs return the existing task instead of starting it again. Results are sent back to Live with the matching delegation ID; typed requests in a connected GPT-Live call use the same backend with their own task IDs.
+
+Allowed reads cover the live clock, memory, open loops, RAG, bounded workspace search, agent/automation listings, calendar and Gmail reads, Linear, GitHub, Factory, Drive search, and web research. **Only `send_sms` and `calendar_create_event` are allowed writes.** Email sending, unrestricted agent delegation, shell commands, arbitrary file reads and deployment tools are unavailable in GPT-Live mode. Realtime retains its separate tool packs.
+
+### Approvals, cancellation and session recovery
+
+GPT-Live shows the exact tool name and arguments for an on-screen Approve/Reject decision. A spoken “yes” does not approve a write. Approvals expire after two minutes or when the user transcript changes. The server atomically claims an approved action before calling the gateway; duplicate clicks cannot execute it twice. A missing receipt or timeout stays **unconfirmed** and is never automatically replayed.
+
+**Cancel task** cancels pending work; an action already executing may still finish. Speech interruptions do not cancel actions. Closing a session cancels pending work and approvals. Resuming carries prior context and task outcomes into a new session without replaying unexecuted approvals.
 
 Live requires an owner-signed-in private Zo page. The API verifies the browser cookie against that fixed private page in addition to the existing HMAC token; an Origin header or bootstrap token alone cannot authorize a Live session. Requests use the private page's same-origin endpoint. If Zo cannot verify the session cookie, access fails closed.
 
 Each Live conversation also receives a server-signed session reference, saved in sessionStorage and sent with subsequent requests. This preserves conversation and approval ownership when browser cookies change, while still requiring owner sign-in on every request. Existing sessions can obtain a reference using their original authenticated cookie. If a saved reference is unavailable, Start conversation clears that browser reference and starts fresh once, without replaying prior actions. Authentication failures, server errors and uncertain action results never trigger this recovery.
 
-The initial tool scope includes memory, open loops, calendar and Gmail reads, Linear, GitHub, Factory, Drive search and web research. Calendar creation and SMS require an on-screen approval of the exact arguments. Email sending, unrestricted agent delegation, shell/file access and deployment tools are intentionally unavailable in this mode. Realtime retains its existing tool packs.
+Task and approval records persist locally at `/home/workspace/.zo/voice/<slug>-live.sqlite` (`VOICE_LIVE_DB_PATH` overrides this). Protect this file: it contains private transcripts, persona prompts and task results. Live and Responses requests set `store: false`; this is not a claim that the local application retains no conversation data.
 
-Task and approval records persist locally at `/home/workspace/.zo/voice/<slug>-live.sqlite` (`VOICE_LIVE_DB_PATH` overrides this). Protect this file: it contains private transcripts, persona prompts and task results. OpenAI audio recording storage is disabled. Each write is claimed atomically before execution; an uncertain result cannot be automatically replayed. Spoken corrections expire outstanding approvals. The Cancel task button stops pending work; an action already executing may still finish. Reconnecting preserves prior context and task outcomes, and cancels unexecuted approvals instead of replaying them.
-
-Use **End conversation** to disconnect. Live waits briefly for final usage before releasing the connection and also requests server-side hangup. Sessions end after 30 minutes or five minutes without user speech. Connected voice time is $0.05/minute, plus backend usage; session creation has a minimum initialization charge. Human audio quality and interruption behavior need a real microphone evaluation.
+Use **End conversation** to disconnect. Live waits briefly for final usage before releasing the connection and also requests server-side hangup. Sessions end after 30 minutes or five minutes without user speech. Live audio and backend reasoning incur separate usage; consult [OpenAI pricing](https://developers.openai.com/api/docs/pricing) for current rates. Background-noise sensitivity and audio quality should be checked on the actual microphone and network.
 
 Persona startup prefers `ZO_ASK_TOKEN` and falls back to `ZO_API_KEY` on transport, HTTP, JSON-RPC or tool errors. Each attempt has a 25-second deadline within a 35-second total lookup budget. Successful Live persona catalogs are cached for five minutes, concurrent starts share a lookup, and credential changes invalidate the cache. Expired or unavailable persona data fails closed before contacting OpenAI; the user receives a retry message. The persona dropdown uses the same credential order and timeout bounds and accepts both structured and legacy string records.
 
-Validation: `bun test tests/live-route.test.ts tests/retrieval.test.ts tests/persona-startup.test.ts` and `tsc --noEmit`. The checked-in TypeScript configuration resolves dependencies from the Zo Space installation without modifying that installation.
+### Memory, RAG and current-time tools
 
-Memory and retrieval use the same gateway in Realtime and GPT-Live. `memory_search` reads structured, permitted, unexpired SQLite facts with sources and dates; `list_open_loops` preserves typed records. `rag_search` and `rag_list_collections` use the canonical local Qdrant MCP implementation (override its entrypoint with `VOICE_RAG_MCP_PATH`). Indexed passages remain historical reference data. If semantic retrieval is unavailable, `workspace_search` provides a literal content/filename fallback with optional `directory` scope, a six-second deadline and explicit partial-result status. It excludes hidden files, symlinks, Trash, dependencies, build output and copied worktrees; content search limits files to 1 MB and three matches per file. Tool failures and timeouts return errors, never a success or an unscheduled follow-up promise.
+Both voice engines use the same gateway retrieval implementations. The reasoning instructions choose the tool according to the question:
+
+| Need | Tool | Result and boundary |
+|---|---|---|
+| Saved preferences or prior decisions | `memory_search` | Structured SQLite facts with sources and dates; respects scope, expiry and withholding. |
+| Unfinished work | `list_open_loops` | Typed open-loop records, retaining fields such as status and priority. |
+| Document knowledge or paraphrased concepts | `rag_search` | Sourced passages from the configured Qdrant index. Indexed copies are historical evidence. |
+| Available semantic collections | `rag_list_collections` | Exact collection names for scoped retrieval. |
+| Literal file/content fallback | `workspace_search` | Optional directory scope, a six-second deadline and explicit partial-result status. |
+| Current date or time in a city | `get_current_time` | Fresh server timestamp, IANA zone, local date/time and daylight-saving offset. |
+
+When memory has no useful matches, instructions direct the backend to try RAG and then workspace search. This is model-guided routing, not an automatic database cascade. A retrieval failure is distinct from zero matches. RAG calls the canonical local Qdrant MCP implementation (`VOICE_RAG_MCP_PATH` can override its entrypoint); deployment does not install that service or populate indexes. Workspace search excludes hidden files, symlinks, Trash, dependencies, build output and copied worktrees; content search limits files to 1 MB and three matches per file. Tool failures and timeouts return errors, never success or a promise of an unscheduled follow-up.
 
 Current-time and date questions use `get_current_time`, an authenticated local server-clock tool in every Realtime pack and the Live delegation allowlist. It returns a fresh timestamp, requested IANA zone, local date/time and daylight-saving offset without an upstream service. Los Angeles uses `America/Los_Angeles`; Arizona is the default only when no location is requested. Invalid or ambiguous zones return an error. Instructions require a fresh call for corrections and repeated time questions, and prohibit treating search snippets or previous answers as a live clock. End and start a conversation after deployment to load the new session instructions.
 
@@ -41,17 +103,23 @@ At a glance:
 1. **Speak naturally** using your microphone.
 2. **Your assistant listens and responds** in real time.
 3. **Zo tools help when needed** with memory, Gmail, Google Calendar, Linear projects, email, and files.
-4. **You hear the answer or receive the completed task.** Changes require your approval.
+4. **You hear the result.** Supported write approvals depend on the mode and tool.
 
 The technical routes and tool packs are documented below for readers who need implementation details.
 
-### Tool packs
+### Realtime native MCP workflow and tool packs
+
+For spoken Realtime requests, `/api/realtime-session` returns the MCP configuration with `allowed_tools` and `require_approval`. OpenAI discovers tools through `/api/<slug>-mcp` and calls that gateway directly. The PWA displays tool progress and handles `mcp_approval_request` with a browser confirmation of the exact arguments, then sends `mcp_approval_response`. Selected read-only tools have bounded transient retries; mutating calls stay one-shot. GPT-Live does not inherit these broader packs.
+
+Typed messages in Realtime and Classic use `/api/<slug>-ask` and `/api/tts`, rather than the spoken Realtime MCP path. Both endpoints permit the PWA's authentication header during CORS preflight so the browser can receive text and reply audio.
 
 | Pack | Tools | `require_approval` |
 |------|-------|--------------------|
 | `essentials` | 31 — live clock, memory, RAG, Gmail read, Calendar read, Linear projects + issue detail, factory status + run details, GitHub status, Drive search, service logs, Alaric read-only delegate, email/SMS send, file read, web search | per-tool: email/SMS writes `always`, reads `never` |
-| `power` | 38 — adds image search/gen, transcription, calendar create | per-tool: writes `always`, reads `never` |
-| `power_with_writes` | 46 — adds agent/automation/route writes, persona switch, publish | per-tool: writes `always`, reads `never` |
+| `power` | 38 — adds image search/gen, transcription, calendar create | email/SMS `always`; other tools `never` |
+| `power_with_writes` | 46 — adds agent/automation/route writes, persona switch, publish | email/SMS and configured agent/automation/route/persona/publish tools `always`; other tools `never` |
+
+Realtime's current approval list does not include `calendar_create_event` or `generate_image`; they can run without an approval prompt in packs that expose them. GPT-Live independently requires approval for calendar creation and does not expose image generation.
 
 ---
 
@@ -82,10 +150,19 @@ The `<slug>` is derived from `--name` (e.g. `--name "Aria"` → `aria-*`). Defau
   - `ZO_ASK_TOKEN` — HMAC secret + Zo Ask proxy auth
   - `ZO_API_KEY` — used by `/api/<slug>-mcp` + `/api/<slug>-personas` to call upstream Zo MCP
   - `MCP_SHARED_TOKEN` — shared secret for OpenAI Realtime → MCP (`openssl rand -hex 32`). The env-var **name** is configurable; pass `--mcp-token-secret YOUR_NAME` to the deploy script to rename it (e.g. `ARIA_MCP_TOKEN`).
-  - `OPENAI_API_KEY` — for Realtime sessions + OpenAI TTS backend
+  - `OPENAI_API_KEY` — for Realtime sessions, GPT-Live sessions, Responses delegation and the OpenAI TTS backend; the project must have access to the selected models
   - `LINEAR_API_KEY` — read-only access to Linear project status and recent issue updates
   - `ELEVENLABS_API_KEY` — only if using ElevenLabs TTS backend (optional)
-  - `MEMORY_DB_PATH` — *optional.* Absolute path to a SQLite memory backend exposing `facts`/`facts_fts`/`open_loops` tables for the `memory_search` + `list_open_loops` tools. Default `/home/workspace/.zo/memory/shared-facts.db`. If unset or the file doesn't exist, those tools degrade gracefully ("memory not configured") and the rest of the assistant works unchanged.
+  - `MEMORY_DB_PATH` — *optional.* Absolute path to the SQLite memory backend. Default `/home/workspace/.zo/memory/shared-facts.db`. A missing backend returns an explicit retrieval error; other tools remain available.
+
+Optional server configuration (set in the environment, not the browser):
+
+| Variable | Default / purpose |
+|---|---|
+| `VOICE_LIVE_BACKEND_MODEL` | `gpt-5.6-luna`; Responses-compatible reasoning/tool model. |
+| `VOICE_LIVE_DB_PATH` | `/home/workspace/.zo/voice/<slug>-live.sqlite`; writable, persistent task and approval state. |
+| `VOICE_LIVE_CUSTOM_VOICES` | Unset; operator-approved OpenAI voice catalog. See [configuration and eligibility](docs/live-voices.md). |
+| `VOICE_RAG_MCP_PATH` | Local Qdrant MCP entrypoint override; requires a working service and populated indexes. |
 
 ---
 
@@ -161,7 +238,7 @@ No config changes needed — redeploy with `deploy-tts-endpoint.ts --deploy-all`
 | edge-tts | Good — 300+ neural voices | Free | none |
 | Browser SpeechSynthesis | Basic | Free | none (fallback) |
 
-In **Realtime mode** (default), OpenAI handles audio synthesis directly via WebRTC — the `/api/tts` proxy is only used in text-mode fallback or for the v1 vanilla shell at `pwa/`.
+In **Realtime** and **GPT-Live**, OpenAI handles conversational audio directly via WebRTC. External TTS voices apply to Classic and Zo Ask text-reply playback, not to the GPT-Live voice selector.
 
 ---
 
@@ -171,7 +248,7 @@ In **Realtime mode** (default), OpenAI handles audio synthesis directly via WebR
 Skills/ai-assistant-voice/
 ├── assets/
 │   ├── alaric-bootstrap-route.ts     # HMAC token issuer (template)
-│   ├── alaric-mcp-route.ts           # JSON-RPC MCP server, 43 tools (template)
+│   ├── alaric-mcp-route.ts           # Shared MCP tools, memory, RAG and live clock
 │   ├── alaric-personas-route.ts      # Dynamic persona catalog via list_personas (template)
 │   ├── ai-ask-route.ts               # Text-mode Zo Ask proxy
 │   ├── realtime-session-route.ts     # OpenAI Realtime mint
@@ -255,6 +332,30 @@ The persona dropdown is populated **dynamically** — `/api/<slug>-personas` cal
 ## GPT-Live voice preferences
 
 GPT-Live has a dedicated voice selector and independent speaking-style preference. Choices are saved per browser and apply to the next conversation without ending the current call. See [GPT-Live voices](docs/live-voices.md) for the supported built-in catalog and operator configuration of approved OpenAI custom voices. Classic external TTS and Realtime voice mapping remain separate.
+
+## Validation and troubleshooting
+
+Run from the repository root on Zo:
+
+```bash
+bun test tests/live-route.test.ts tests/retrieval.test.ts tests/persona-startup.test.ts tests/clock.test.ts tests/typed-message.test.ts
+tsc --noEmit
+```
+
+The checked-in TypeScript configuration resolves React, Hono and Bun types from `/__substrate/space/node_modules` without modifying that installation. A non-Zo development environment must supply equivalent dependencies and adjust those paths. Tests use isolated fixtures; they do not prove OpenAI account access or microphone quality.
+
+| Symptom | Check |
+|---|---|
+| `owner_sign_in_required` | Open the private page and sign in to Zo; a bootstrap token alone cannot authorize GPT-Live. |
+| `session_not_found` after a reload | Start conversation performs one stale-reference recovery. Authentication errors and server failures do not trigger automatic retries. |
+| Startup returns `persona_unavailable` or a 502 | Check the persona service and OpenAI response. Persona lookup has bounded credential fallback; do not assume every 502 has the same cause. |
+| Voice selection is rejected | Refresh the available catalog and choose an authorized voice; external provider IDs are unsupported. |
+| Memory/RAG fails | Check the SQLite path, Qdrant MCP entrypoint and populated collections. A service failure does not prove the information is absent. |
+| Wrong city time | End and start the conversation to load current instructions; confirm a fresh `get_current_time` call uses the requested IANA zone. |
+| Typed text or reply audio is blocked | Verify both Ask and TTS preflight responses allow the configured `X-<assistant-name>-Auth` header. |
+| An action is unconfirmed | Check the destination's actual state before requesting it again. Do not infer failure or resend automatically. |
+
+Deployment verification included real gateway memory/RAG/clock results, real OpenAI session creation and browser text/audio delivery. The owner also confirmed a successful spoken GPT-Live conversation. Those observations do not replace a fresh microphone check after future transport changes.
 
 ## License
 
