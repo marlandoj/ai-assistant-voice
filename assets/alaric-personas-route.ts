@@ -109,47 +109,41 @@ const cache: {
 };
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-async function refreshCache(apiKey: string): Promise<void> {
+async function refreshCache(): Promise<void> {
   if (cache.pending) return cache.pending;
   const now = Date.now();
   if (cache.personas.length > 0 && now - cache.fetchedAt < CACHE_TTL_MS) return;
   const p = (async () => {
     try {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 30_000);
-      const resp = await fetch(ZO_MCP_ENDPOINT, {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/call",
-          id: Date.now(),
-          params: { name: "list_personas", arguments: {} },
-        }),
-        signal: ac.signal,
-      });
-      clearTimeout(timer);
-      if (!resp.ok) {
-        cache.lastError = `http_${resp.status}`;
-        return;
-      }
-      const parsed: any = await resp.json();
-      const text = parsed?.result?.content?.[0]?.text;
-      if (typeof text !== "string") {
-        cache.lastError = `bad_text_shape`;
-        return;
-      }
-      let arr: any;
-      try { arr = JSON.parse(text); } catch (e: any) {
-        cache.lastError = `json_parse_failed`;
-        return;
-      }
-      if (!Array.isArray(arr)) {
-        cache.lastError = `not_array`;
-        return;
+      let arr: any[] = [];
+      const deadline = AbortSignal.timeout(35000);
+      const keys = [...new Set([process.env.ZO_ASK_TOKEN, process.env.ZO_API_KEY].filter((key): key is string => !!key))];
+      for (const key of keys) {
+        try {
+          const resp = await fetch(ZO_MCP_ENDPOINT, {
+            method: "POST",
+            headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", method: "tools/call", id: Date.now(), params: { name: "list_personas", arguments: {} } }),
+            signal: AbortSignal.any([deadline, AbortSignal.timeout(25000)]),
+          });
+          if (!resp.ok) { cache.lastError = `http_${resp.status}`; continue; }
+          const parsed: any = await resp.json();
+          if (parsed.error || parsed.result?.isError) { cache.lastError = "upstream_error"; continue; }
+          const entries = JSON.parse(parsed.result?.content?.[0]?.text || "null");
+          if (!Array.isArray(entries) || !entries.length) { cache.lastError = "invalid_catalog"; continue; }
+          arr = entries;
+          break;
+        } catch {
+          cache.lastError = "upstream_unavailable";
+          if (deadline.aborted) break;
+        }
       }
       const fresh: Persona[] = [];
       for (const entry of arr) {
+        if (entry && typeof entry === "object" && typeof entry.id === "string" && typeof entry.name === "string") {
+          fresh.push({ id: entry.id, name: entry.name });
+          continue;
+        }
         if (typeof entry !== "string") continue;
         const idMatch = entry.match(/id='([^']+)'/);
         const nameMatch = entry.match(/name='([^']+)'/);
@@ -211,12 +205,7 @@ export default async (c: Context): Promise<Response> => {
     return jsonError({ error: "invalid_token" }, 401, cors);
   }
 
-  const apiKey = process.env.ZO_API_KEY;
-  if (!apiKey) {
-    return jsonError({ error: "not_configured", detail: "ZO_API_KEY missing" }, 503, cors);
-  }
-
-  await refreshCache(apiKey).catch(() => {});
+  await refreshCache().catch(() => {});
 
   if (cache.personas.length === 0) {
     return jsonError(

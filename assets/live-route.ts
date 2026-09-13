@@ -113,18 +113,39 @@ async function mcp(method: string, params: unknown, signal: AbortSignal) {
   }
   return result.result;
 }
-async function persona(id: string, signal: AbortSignal) {
-  let result: any;
-  for (const key of [...new Set([process.env.ZO_API_KEY, process.env.ZO_ASK_TOKEN].filter(Boolean))]) {
-    const response = await fetch("https://api.zo.computer/mcp", { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: { name: "list_personas", arguments: {} } }), signal });
-    if (!response.ok) continue;
-    const body = await response.json() as any;
-    if (body.error) continue;
-    result = body.result;
-    break;
+const personaCache = { entries: [] as any[], expires: 0, credentials: "", pending: null as Promise<void> | null };
+async function persona(id: string) {
+  const keys = [...new Set([process.env.ZO_ASK_TOKEN, process.env.ZO_API_KEY].filter((key): key is string => !!key))];
+  const credentials = digest(JSON.stringify(keys));
+  if (personaCache.credentials !== credentials) {
+    personaCache.entries = []; personaCache.expires = 0; personaCache.pending = null; personaCache.credentials = credentials;
   }
-  if (result?.isError) throw new Error("persona_unavailable");
-  const entries = JSON.parse(result?.content?.[0]?.text || "[]");
+  if (personaCache.expires <= Date.now()) {
+    if (!personaCache.pending) {
+      const pending = (async () => {
+        const deadline = AbortSignal.timeout(35000);
+        for (const key of keys) {
+          try {
+            const response = await fetch("https://api.zo.computer/mcp", { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: { name: "list_personas", arguments: {} } }), signal: AbortSignal.any([deadline, AbortSignal.timeout(25000)]) });
+            if (!response.ok) continue;
+            const body = await response.json() as any;
+            if (body.error || body.result?.isError) continue;
+            const entries = JSON.parse(body.result?.content?.[0]?.text || "null");
+            if (!Array.isArray(entries) || !entries.length) continue;
+            if (personaCache.credentials === credentials) {
+              personaCache.entries = entries; personaCache.expires = Date.now() + 5 * 60000;
+            }
+            return;
+          } catch { if (deadline.aborted) break; }
+        }
+        throw new Error("persona_unavailable");
+      })();
+      personaCache.pending = pending;
+      void pending.finally(() => { if (personaCache.pending === pending) personaCache.pending = null; }).catch(() => {});
+    }
+    await personaCache.pending;
+  }
+  const entries = personaCache.entries;
   for (const entry of entries) {
     if (typeof entry === "object" && entry?.id === id && typeof entry.prompt === "string") return { name: entry.name, prompt: entry.prompt };
     if (typeof entry !== "string" || !entry.includes(`id='${id}'`)) continue;
@@ -245,7 +266,7 @@ export default async function liveRoute(c: Context): Promise<Response> {
       }
       if (!insert(id, owner, "session", "creating", value)) return reply({ error: "session_creation_already_attempted", session_id: id }, 409);
       try {
-        const selected = await persona(value.persona, AbortSignal.timeout(15000));
+        const selected = await persona(value.persona);
         value.prompt = selected.prompt; value.name = selected.name;
         const response = await fetch("https://api.openai.com/v1/live/sessions", {
           method: "POST", headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
@@ -321,6 +342,7 @@ export default async function liveRoute(c: Context): Promise<Response> {
     return reply({ error: "unknown_action" }, 400);
   } catch (error) {
     const message = error instanceof Error ? error.message : "live_request_failed";
+    if (message === "persona_unavailable") return reply({ error: message, message: "Alaric's persona service is temporarily unavailable. Please try Start conversation again." }, 503);
     return reply({ error: /^[a-z0-9_]+$/.test(message) ? message : "live_request_failed" }, message.endsWith("not_found") ? 404 : 502);
   }
 }

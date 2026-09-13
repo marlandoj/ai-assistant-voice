@@ -30,10 +30,12 @@
   "include": [
     "assets/pwa-page.tsx",
     "assets/live-route.ts",
+    "assets/alaric-personas-route.ts",
     "assets/alaric-mcp-route.ts",
     "assets/realtime-session-route.ts",
     "tests/retrieval.test.ts",
     "tests/live-route.test.ts",
+    "tests/persona-startup.test.ts",
     "scripts/deploy-tts-endpoint.ts"
   ]
 }
