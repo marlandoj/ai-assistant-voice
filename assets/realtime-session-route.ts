@@ -77,6 +77,7 @@ function jsonError(
 // TOOL PACKS — which alaric-mcp tools are exposed for a given session
 // =========================================================================
 const TOOL_PACK_ESSENTIALS = [
+  "get_current_time",
   "list_open_loops", "memory_search", "rag_search", "rag_list_collections", "list_agents", "list_automations",
   "list_calendar_events", "gmail_search", "gmail_read", "linear_project_updates",
   "send_email", "send_sms", "read_file",
@@ -115,6 +116,7 @@ function buildToolRoutingSuffix(pack: string): string {
     "",
     "",
     "TOOL USE — CRITICAL:",
+    "For current time/date, including corrections and repeat questions, call get_current_time freshly before answering. Never use web-search snippets, memory, session-start timestamps or prior answers as a live clock. Honor the requested location: Los Angeles means America/Los_Angeles, with automatic daylight saving. Default to America/Phoenix only when no location is requested. Read the returned local time and zone without converting it again. If the clock fails or a place is ambiguous, say so; never guess.",
     "You have a JARVIS-style MCP toolkit at your disposal via the `{{ASSISTANT_SLUG}}` MCP server. Prefer the most specific tool. Selection guide:",
     "",
     "• \"open loops\" / \"what's in progress\" / \"pending\" / \"backlog\" → list_open_loops",

@@ -184,6 +184,11 @@ const TOOL_DEFINITIONS: Array<{
 }> = [
   // -------- ESSENTIALS --------
   {
+    name: "get_current_time",
+    description: "Read the live server clock for the current time/date in a requested IANA time zone, with daylight saving applied automatically. Always use this for time now, today's date, or a time correction; never use web snippets, memory or an earlier clock result. Use America/Los_Angeles for Los Angeles. Omit time_zone only when no location was requested (defaults to America/Phoenix). Unknown or ambiguous zones return an error, not a guessed time.",
+    inputSchema: { type: "object", properties: { time_zone: { type: "string", description: "IANA zone, e.g. America/Los_Angeles, America/Phoenix, America/New_York, Europe/London, Asia/Tokyo or UTC." } }, additionalProperties: false },
+  },
+  {
     name: "list_open_loops",
     description: "List the user's currently open work items (loops/tasks-in-progress) from his workspace memory. Use when they ask about open loops, current work, what's in progress, what's pending, or backlog.",
     inputSchema: {
@@ -717,6 +722,25 @@ function structuredToolResult(value: { records: unknown[]; count: number; [key: 
   while (JSON.stringify(value).length > 7600 && value.records.length) value.records.pop();
   const result = { ...value, count: value.records.length, truncated: value.count > value.records.length };
   return { ...toolResult(JSON.stringify(result)), structuredContent: result };
+}
+
+export function handleCurrentTime(args: any, now = new Date()) {
+  if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).some(key => key !== "time_zone")) return toolResult("Expected an optional time_zone string only.", true);
+  const requested = args.time_zone === undefined ? "America/Phoenix" : args.time_zone;
+  if (typeof requested !== "string" || !requested.trim() || requested.length > 100) return toolResult("Provide a valid IANA time_zone; no current time was verified.", true);
+  const aliases: Record<string, string> = { "los angeles": "America/Los_Angeles", "la": "America/Los_Angeles", "phoenix": "America/Phoenix", "arizona": "America/Phoenix", "new york": "America/New_York", "london": "Europe/London", "tokyo": "Asia/Tokyo", "utc": "UTC" };
+  const zone = aliases[requested.trim().toLowerCase()] || requested.trim();
+  if (zone !== "UTC" && !/^[A-Za-z_+-]+\/[A-Za-z_+\/-]+$/.test(zone)) return toolResult("Unknown or ambiguous time zone. Use an IANA zone such as America/Los_Angeles; no current time was verified.", true);
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", { timeZone: zone, year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true, timeZoneName: "short" });
+    const timeZone = formatter.resolvedOptions().timeZone;
+    const time = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true }).format(now);
+    const date = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+    const abbreviation = formatter.formatToParts(now).find(part => part.type === "timeZoneName")!.value;
+    const offset = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" }).formatToParts(now).find(part => part.type === "timeZoneName")!.value;
+    const value = { source: "server_clock", observed_at: now.toISOString(), time_zone: timeZone, local_date: date, local_time: time, zone_abbreviation: abbreviation, utc_offset: offset.replace("GMT", "UTC"), answer: `It is ${time} ${abbreviation} in ${timeZone} on ${date}.`, freshness: "Read for this request only. Call again for any later current-time question." };
+    return { ...toolResult(JSON.stringify(value)), structuredContent: value };
+  } catch { return toolResult("Invalid or unavailable IANA time zone; no current time was verified. Clarify the requested location.", true); }
 }
 
 export async function callRagTool(name: "rag_search" | "rag_list_collections", args: any, options: { path?: string; timeoutMs?: number } = {}) {
@@ -1611,6 +1635,7 @@ export default async (c: Context): Promise<Response> => {
   if (method === "tools/call") {
     const toolName = String(params?.name || "");
     const toolArgs = params?.arguments || {};
+    if (toolName === "get_current_time") return jsonRpcOk(id, handleCurrentTime(toolArgs));
     const apiKey = process.env.ZO_API_KEY || process.env.ZO_ASK_TOKEN;
     if (!apiKey) return jsonRpcOk(id, toolResult("ZO_API_KEY not configured", true));
     try {

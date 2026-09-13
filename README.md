@@ -30,6 +30,8 @@ Validation: `bun test tests/live-route.test.ts tests/retrieval.test.ts tests/per
 
 Memory and retrieval use the same gateway in Realtime and GPT-Live. `memory_search` reads structured, permitted, unexpired SQLite facts with sources and dates; `list_open_loops` preserves typed records. `rag_search` and `rag_list_collections` use the canonical local Qdrant MCP implementation (override its entrypoint with `VOICE_RAG_MCP_PATH`). Indexed passages remain historical reference data. If semantic retrieval is unavailable, `workspace_search` provides a literal content/filename fallback with optional `directory` scope, a six-second deadline and explicit partial-result status. It excludes hidden files, symlinks, Trash, dependencies, build output and copied worktrees; content search limits files to 1 MB and three matches per file. Tool failures and timeouts return errors, never a success or an unscheduled follow-up promise.
 
+Current-time and date questions use `get_current_time`, an authenticated local server-clock tool in every Realtime pack and the Live delegation allowlist. It returns a fresh timestamp, requested IANA zone, local date/time and daylight-saving offset without an upstream service. Los Angeles uses `America/Los_Angeles`; Arizona is the default only when no location is requested. Invalid or ambiguous zones return an error. Instructions require a fresh call for corrections and repeated time questions, and prohibit treating search snippets or previous answers as a live clock. End and start a conversation after deployment to load the new session instructions.
+
 Protocol references: [WebRTC](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live), [client delegation](https://developers.openai.com/api/docs/guides/live-delegation), [session lifecycle](https://developers.openai.com/api/docs/guides/live-conversations).
 
 ![How AI Assistant Voice turns a conversation into a helpful action](docs/alaric-voice-v3-architecture.png)
@@ -47,9 +49,9 @@ The technical routes and tool packs are documented below for readers who need im
 
 | Pack | Tools | `require_approval` |
 |------|-------|--------------------|
-| `essentials` | 30 — memory, RAG, Gmail read, Calendar read, Linear projects + issue detail, factory status + run details, GitHub status, Drive search, service logs, Alaric read-only delegate, email/SMS send, file read, web search | per-tool: email/SMS writes `always`, reads `never` |
-| `power` | 37 — adds image search/gen, transcription, calendar create | per-tool: writes `always`, reads `never` |
-| `power_with_writes` | 45 — adds agent/automation/route writes, persona switch, publish | per-tool: writes `always`, reads `never` |
+| `essentials` | 31 — live clock, memory, RAG, Gmail read, Calendar read, Linear projects + issue detail, factory status + run details, GitHub status, Drive search, service logs, Alaric read-only delegate, email/SMS send, file read, web search | per-tool: email/SMS writes `always`, reads `never` |
+| `power` | 38 — adds image search/gen, transcription, calendar create | per-tool: writes `always`, reads `never` |
+| `power_with_writes` | 46 — adds agent/automation/route writes, persona switch, publish | per-tool: writes `always`, reads `never` |
 
 ---
 
@@ -63,7 +65,7 @@ The `<slug>` is derived from `--name` (e.g. `--name "Aria"` → `aria-*`). Defau
 | `/api/<slug>-ask` | api | Text-mode Zo Ask proxy (fallback for non-Realtime mode) |
 | `/api/<slug>-bootstrap` | api | HMAC session token issuer (24h TTL) |
 | `/api/realtime-session` | api | OpenAI Realtime session mint + MCP tool config |
-| `/api/<slug>-mcp` | api | JSON-RPC 2.0 MCP server, 45 tools, 3-tier auth |
+| `/api/<slug>-mcp` | api | JSON-RPC 2.0 MCP server, 46 tools, 3-tier auth |
 | `/api/<slug>-personas` | api | Dynamic persona catalog — `list_personas` MCP (HMAC + ETag) |
 | `/api/<slug>-live` | api | Optional GPT-Live session, delegation, approvals and durable task state |
 | `<path>` | page | The React PWA |
