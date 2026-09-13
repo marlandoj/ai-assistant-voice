@@ -437,7 +437,7 @@ export default function AlaricVoicePWA() {
   const [liveTasks,setLiveTasks] = useState<LiveTask[]>([]);
   const [liveBusy,setLiveBusy] = useState(false);
   const [liveUsage,setLiveUsage] = useState(0);
-  const liveRef = useRef({ id: "", previous: sessionStorage.getItem("alaric_live_session")||"", fragments: [] as LiveFragment[], seen: new Set<string>(), generation: 0, ready: false, busy: false, timer: 0, idle: 0, contextTimer: 0, pending: 0, version: 0, final: false });
+  const liveRef = useRef({ id: "", previous: sessionStorage.getItem("alaric_live_session")||"", token: sessionStorage.getItem("alaric_live_session_token")||"", fragments: [] as LiveFragment[], seen: new Set<string>(), generation: 0, ready: false, busy: false, timer: 0, idle: 0, contextTimer: 0, pending: 0, version: 0, final: false });
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("alaric_theme") as Theme) || "dark");
   const [voiceQuality, setVoiceQuality] = useState<string>(() => localStorage.getItem("alaric_voice_quality") || "hf");
   const [realtimeMode,setRealtimeMode] = useState(() => {
@@ -818,9 +818,14 @@ export default function AlaricVoicePWA() {
   useEffect(()=>{sendZoRef.current=sendZoMessage;},[sendZoMessage]);
 
   async function liveRequest(body: Record<string, unknown>) {
-    const response = await authedFetch(LIVE_ENDPOINT, { method:"POST", credentials:"same-origin", body:JSON.stringify({session_id:liveRef.current.id,...body}) });
+    const id=liveRef.current.id;
+    const response = await authedFetch(LIVE_ENDPOINT, { method:"POST", credentials:"same-origin", body:JSON.stringify({session_id:id,session_token:liveRef.current.token||undefined,...body}) });
     const data = await response.json();
-    if(!response.ok) throw new Error(data.message||data.error||`Live request ${response.status}`);
+    if(!response.ok) throw Object.assign(new Error(data.message||data.error||`Live request ${response.status}`),{code:data.error,status:response.status});
+    if(body.action!=="create"&&id===liveRef.current.id&&typeof data.session_token==="string") {
+      liveRef.current.token=data.session_token;
+      sessionStorage.setItem("alaric_live_session_token",data.session_token);
+    }
     return data;
   }
 
@@ -912,8 +917,17 @@ export default function AlaricVoicePWA() {
     try {
       if(state.id||state.previous) {
         state.id=state.id||state.previous;
-        await liveRequest({action:"close"});
-        await refreshLiveTasks();
+        try {
+          await liveRequest({action:"close"});
+          await refreshLiveTasks();
+        } catch(error:any) {
+          if(error.status!==404||error.code!=="session_not_found")throw error;
+          state.id="";state.previous="";state.token="";state.fragments=[];state.seen.clear();
+          sessionStorage.removeItem("alaric_live_session");
+          sessionStorage.removeItem("alaric_live_session_token");
+          setLiveTasks([]);
+          showToast("Previous conversation unavailable. Starting fresh; prior actions will not be repeated.","info",setToast_);
+        }
       }
       const stream=await navigator.mediaDevices.getUserMedia({audio:true});
       if(generation!==state.generation){stream.getTracks().forEach(track=>track.stop());return;}
@@ -969,7 +983,9 @@ export default function AlaricVoicePWA() {
       if(generation!==state.generation)return;
       const result=await liveRequest({action:"create",request_id:crypto.randomUUID(),persona_id:personaId,voice:liveVoice,speaking_style:liveStyle,sdp:pc.localDescription?.sdp,resume_session_id:state.id||undefined});
       state.previous=state.id;state.id=result.session_id;
+      state.token=result.session_token||"";
       sessionStorage.setItem("alaric_live_session",state.id);
+      sessionStorage.setItem("alaric_live_session_token",state.token);
       state.fragments=result.fragments||[];state.seen.clear();
       if(generation!==state.generation){await liveRequest({action:"close"});return;}
       await pc.setRemoteDescription({type:"answer",sdp:result.transport.sdp});
@@ -1214,7 +1230,7 @@ export default function AlaricVoicePWA() {
   }, [messages, convId, convTags, archive]);
 
   const clearSession=useCallback(async(skipArchive = false)=>{
-    if(liveRef.current.id){await endLive();liveRef.current.id="";liveRef.current.previous="";liveRef.current.fragments=[];setLiveTasks([]);sessionStorage.removeItem("alaric_live_session");}
+    if(liveRef.current.id){await endLive();liveRef.current.id="";liveRef.current.previous="";liveRef.current.token="";liveRef.current.fragments=[];setLiveTasks([]);sessionStorage.removeItem("alaric_live_session");sessionStorage.removeItem("alaric_live_session_token");}
     if (!skipArchive && messages.length > 1) archiveCurrent();
     setMessages([]);setConvId("");setConvTags([]);saveConvId("");setRtUserText("");
     sessionStart.current = Date.now();
@@ -1228,7 +1244,7 @@ export default function AlaricVoicePWA() {
     setLiveVoice(liveV);setLiveStyle(style);
     localStorage.setItem("alaric_live_voice",liveV);localStorage.setItem("alaric_live_style",style);
     if(live)stopWake();
-    if(persona!==personaId){liveRef.current.id="";liveRef.current.previous="";liveRef.current.fragments=[];setLiveTasks([]);sessionStorage.removeItem("alaric_live_session");}
+    if(persona!==personaId){liveRef.current.id="";liveRef.current.previous="";liveRef.current.token="";liveRef.current.fragments=[];setLiveTasks([]);sessionStorage.removeItem("alaric_live_session");sessionStorage.removeItem("alaric_live_session_token");}
     if(live!==liveMode)disconnectRealtime();
     setLiveMode(live);localStorage.setItem("alaric_live_mode",String(live));
     if(!rt&&rtConnected)disconnectRealtime();

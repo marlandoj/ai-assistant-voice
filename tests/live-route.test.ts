@@ -179,3 +179,60 @@ test("close cancels approvals and resume preserves history without replay",async
   expect(resumed.status).toBe(201);expect(resumed.data.fragments.length).toBe(1);expect(resumed.data.previous_tasks[0].status).toBe("cancelled");expect(writes).toBe(before);
   expect((await call({action:"status",session_id},{cookie:"zo_session=valid-other"})).status).toBe(404);
 });
+
+test("signed session reference survives cookie changes, preserves RAG and resumes without replay",async()=>{
+  mode="rag";
+  const original="zo_session=valid-stable; theme=dark";
+  const changed="theme=light; analytics=new; zo_session=valid-refreshed";
+  const created=await call({action:"create",request_id:crypto.randomUUID(),sdp:"v=0\r\n",persona_id:"persona"},{cookie:original});
+  const {session_id,session_token}=created.data;
+  expect(session_token).toMatch(/^[a-f0-9]{64}$/);
+  const ref={session_id,session_token};
+  const before=writes;
+  const task=await call({...ref,action:"delegate",delegation_id:"cookie-rag",offset_ms:1000,fragments:fragment("Search the saved documentation")},{cookie:changed});
+  expect(task.data.status).toBe("completed");
+  expect((await call({...ref,action:"status"},{cookie:changed})).data.tasks[0].task_id).toBe(task.data.task_id);
+  expect((await call({...ref,action:"close"},{cookie:changed})).data.status).toBe("closed");
+  const resumed=await call({...ref,action:"create",resume_session_id:session_id,request_id:crypto.randomUUID(),sdp:"v=0\r\n",persona_id:"persona"},{cookie:changed});
+  expect(resumed.status).toBe(201);
+  expect(resumed.data.session_token).not.toBe(session_token);
+  expect(resumed.data.previous_tasks[0].status).toBe("completed");
+  expect(resumed.data.fragments).toHaveLength(1);
+  expect(writes).toBe(before);
+});
+
+test("session proof cannot bypass sign-in or authorize another session",async()=>{
+  const cookie="zo_session=valid-proof-guard";
+  const created=await call({action:"create",request_id:crypto.randomUUID(),sdp:"v=0\r\n"},{cookie});
+  const ref={session_id:created.data.session_id,session_token:created.data.session_token,action:"status"};
+  expect((await call(ref,{cookie:""})).status).toBe(401);
+  expect((await call(ref,{cookie:"zo_session=invalid"})).status).toBe(401);
+  expect((await call(ref,{cookie,auth:false})).status).toBe(401);
+  expect((await call(ref,{cookie,origin:"https://attacker.zo.space"})).status).toBe(403);
+  expect((await call({...ref,session_token:"0".repeat(64)},{cookie:"zo_session=valid-other"})).status).toBe(404);
+  expect((await call({...ref,session_id:"session_missing"},{cookie})).status).toBe(404);
+  expect((await call({...ref,session_token:undefined},{cookie:"zo_session=valid-other"})).status).toBe(404);
+});
+
+test("legacy owner can obtain proof without changing session or action records",async()=>{
+  const cookie="zo_session=valid-legacy",session_id=await create(cookie);
+  const result=await call({action:"status",session_id},{cookie});
+  expect(result.data.session_token).toMatch(/^[a-f0-9]{64}$/);
+  expect((await call({action:"status",session_id,session_token:result.data.session_token},{cookie:"zo_session=valid-legacy; theme=changed"})).status).toBe(200);
+});
+
+test("cookie refresh keeps exact action approval and uncertain outcome replay protection",async()=>{
+  mode="uncertain";
+  const cookie="zo_session=valid-proof-write";
+  const created=await call({action:"create",request_id:crypto.randomUUID(),sdp:"v=0\r\n",persona_id:"persona"},{cookie});
+  const ref={session_id:created.data.session_id,session_token:created.data.session_token};
+  const task=(await call({...ref,action:"delegate",delegation_id:"proof-write",offset_ms:1000,fragments:fragment("Text me")},{cookie})).data;
+  const changed="zo_session=valid-proof-write; analytics=updated";
+  const approval={...ref,action:"approve",task_id:task.task_id,approval_id:task.approval.id,approve:true};
+  const before=writes;
+  expect((await call({...approval,approval_id:"wrong"},{cookie:changed})).status).toBe(409);
+  expect(writes).toBe(before);
+  expect((await call(approval,{cookie:changed})).data.status).toBe("uncertain");
+  expect((await call(approval,{cookie:changed})).status).toBe(409);
+  expect(writes).toBe(before+1);
+});

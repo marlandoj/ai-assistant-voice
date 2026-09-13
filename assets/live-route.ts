@@ -67,6 +67,20 @@ function claim(id: string, from: string, to: string): boolean {
   return db().query("UPDATE live_records SET status=?,updated=? WHERE id=? AND status=?").run(to, Date.now(), id, from).changes === 1;
 }
 function digest(value: string) { return createHash("sha256").update(value).digest("hex"); }
+function sessionToken(id: string, secret: string) {
+  return createHmac("sha256", secret).update(`live-session-v1:${id}`).digest("hex");
+}
+function sessionOwner(body: any, cookieOwner: string, secret: string) {
+  const id = String(body.resume_session_id || body.session_id || "");
+  if (!id || body.session_token === undefined || body.session_token === "") return cookieOwner;
+  if (typeof body.session_token !== "string" || !/^[a-f0-9]{64}$/.test(body.session_token) ||
+      !timingSafeEqual(Buffer.from(body.session_token, "hex"), Buffer.from(sessionToken(id, secret), "hex"))) {
+    throw new Error("session_not_found");
+  }
+  const row = get(id);
+  if (!row || row.kind !== "session") throw new Error("session_not_found");
+  return row.owner;
+}
 function verified(token: string, secret: string) {
   const p = token.split(".");
   if (p.length !== 4 || p[0] !== "v1" || !/^\d+$/.test(p[1]) || Number(p[1]) <= Date.now() || !/^[a-f0-9]{64}$/.test(p[3])) return false;
@@ -204,12 +218,12 @@ export default async function liveRoute(c: Context): Promise<Response> {
     } catch { return reply({ error: "owner_auth_unavailable" }, 503); }
   }
   if (!process.env.OPENAI_API_KEY) return reply({ error: "openai_unconfigured" }, 503);
-  const owner = cookieId;
   try {
     const raw = await c.req.text();
     if (raw.length > 180000) return reply({ error: "request_too_large" }, 413);
     const body = JSON.parse(raw);
     if (body.action === "voices") return reply({ voices: [...LIVE_VOICES, ...customVoices()], default_voice: "marin" });
+    const owner = sessionOwner(body, cookieId, secret);
     if (body.action === "create") {
       if (typeof body.request_id !== "string" || !/^[a-zA-Z0-9_-]{8,80}$/.test(body.request_id) || typeof body.sdp !== "string" || !body.sdp.startsWith("v=0") || body.sdp.length > 64000) return reply({ error: "invalid_session_request" }, 400);
       const voice = body.voice === undefined ? "marin" : body.voice;
@@ -242,7 +256,7 @@ export default async function liveRoute(c: Context): Promise<Response> {
         if (!result.session?.id || !result.transport?.sdp) throw new Error("invalid_live_response");
         value.upstream = result.session.id;
         put(id, owner, "session", "open", value);
-        return reply({ session_id: id, session: result.session, transport: result.transport, expires_at: value.expires, fragments: value.fragments, previous_tasks: value.previous }, 201);
+        return reply({ session_id: id, session_token: sessionToken(id, secret), session: result.session, transport: result.transport, expires_at: value.expires, fragments: value.fragments, previous_tasks: value.previous }, 201);
       } catch (error) { put(id, owner, "session", "uncertain", value); throw error; }
     }
     const id = String(body.session_id || "");
@@ -253,13 +267,13 @@ export default async function liveRoute(c: Context): Promise<Response> {
       for (const row of pending) { const task: Task = JSON.parse(row.data); if (task.session === id) { claim(row.id, row.status, "cancelled"); active.get(row.id)?.abort(); } }
       if (session.value.upstream) {
         const response = await fetch(`https://api.openai.com/v1/live/sessions/${encodeURIComponent(session.value.upstream)}/hangup`, { method: "POST", headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, signal: AbortSignal.timeout(10000) });
-        return reply({ status: "closed", hangup_confirmed: response.ok || response.status === 404 });
+        return reply({ status: "closed", session_token: sessionToken(id, secret), hangup_confirmed: response.ok || response.status === 404 });
       }
-      return reply({ status: "closed", hangup_confirmed: false });
+      return reply({ status: "closed", session_token: sessionToken(id, secret), hangup_confirmed: false });
     }
     if (body.action === "status") {
       const rows = db().query("SELECT * FROM live_records WHERE owner=? AND kind='task' ORDER BY updated DESC LIMIT 100").all(owner) as Row[];
-      return reply({ tasks: rows.filter(row => JSON.parse(row.data).session === id).map(row => taskView(row.id, row, JSON.parse(row.data))) });
+      return reply({ session_token: sessionToken(id, secret), tasks: rows.filter(row => JSON.parse(row.data).session === id).map(row => taskView(row.id, row, JSON.parse(row.data))) });
     }
     if (session.row.status !== "open" || session.value.expires <= Date.now()) return reply({ error: "session_closed" }, 409);
     if (body.action === "context" || body.action === "delegate") {
