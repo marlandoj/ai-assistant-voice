@@ -9,6 +9,9 @@ const TTS_ENDPOINT = `${ZO_SPACE}/api/tts`;
 const ASK_ENDPOINT = `${ZO_SPACE}/api/{{ASSISTANT_SLUG}}-ask`;
 const RT_SESSION = `${ZO_SPACE}/api/realtime-session`;
 const RT_MODEL = "gpt-realtime-2.1";
+const LIVE_ENDPOINT = "/api/{{ASSISTANT_SLUG}}-live";
+type LiveFragment = { role: "user" | "assistant"; delta: string; start_ms: number; end_ms: number };
+type LiveTask = { task_id: string; delegation_id?: string; status: string; result?: string; approval?: { id: string; name: string; arguments: Record<string, unknown> } };
 const PERSONAS_ENDPOINT = `${ZO_SPACE}/api/{{ASSISTANT_SLUG}}-personas`;
 const BOOTSTRAP_ENDPOINT = `${ZO_SPACE}/api/{{ASSISTANT_SLUG}}-bootstrap`;
 
@@ -27,6 +30,22 @@ const ELEVEN_VOICES: Record<string, string> = {
   Bella: "EXAVITQu4vr4xnSDxMaL",
   Grace: "Yko7PKHZNXotIFUBG7I9",
 };
+const LIVE_VOICES = [
+  { id: "marin", name: "Marin (default)", group: "Default" },
+  { id: "vesper", name: "Vesper · British masculine", group: "English" },
+  { id: "meridian", name: "Meridian · North American masculine", group: "English" },
+  { id: "quartz", name: "Quartz · Australian feminine", group: "English" },
+  { id: "ripple", name: "Ripple · Australian masculine", group: "English" },
+  { id: "willow", name: "Willow · Irish feminine", group: "English" },
+  { id: "stone", name: "Stone · Irish masculine", group: "English" },
+  { id: "gleam", name: "Gleam · North American feminine", group: "English" },
+  { id: "beacon", name: "Beacon · Filipino masculine", group: "English" },
+  { id: "delta", name: "Delta · Southern U.S. feminine", group: "English" },
+  { id: "cinder", name: "Cinder · Southern U.S. masculine", group: "English" },
+  { id: "bossa", name: "Bossa · Brazilian feminine", group: "Portuguese" },
+  { id: "tempo", name: "Tempo · Brazilian masculine", group: "Portuguese" },
+];
+
 const RT_VOICES = ["echo", "shimmer", "alloy", "ash", "coral", "sage", "verse"];
 
 // Slow tools (median > 5s) get a one-line filler so the user hears something while we wait.
@@ -62,6 +81,7 @@ async function obtainToken(): Promise<string> {
 async function authedFetch(url: string, init: RequestInit = {}, retries = 1): Promise<Response> {
   const token = await obtainToken();
   const headers = new Headers(init.headers || {});
+  headers.set("Accept", "application/json");
   headers.set("X-{{ASSISTANT_NAME}}-Auth", token);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const resp = await fetch(url, { ...init, headers });
@@ -196,7 +216,7 @@ const ANIMATIONS = `
 @keyframes micPulseTeal{0%{box-shadow:0 0 0 0 rgba(0,212,170,0.5)}70%{box-shadow:0 0 0 18px rgba(0,212,170,0)}100%{box-shadow:0 0 0 0 rgba(0,212,170,0)}}
 @keyframes micPulseGreen{0%{box-shadow:0 0 0 0 rgba(34,197,94,0.5)}70%{box-shadow:0 0 0 18px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
 @keyframes msgIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-@keyframes typingBounce{0%,60%,100%{transform:translateY(0);opacity:0.4}30%{transform:translateY(-6px);opacity:1}}
+@keyframes typingPulse{0%,60%,100%{opacity:0.4}30%{opacity:1}}
 @keyframes portraitBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.03)}}
 @keyframes portraitGlow{0%,100%{box-shadow:0 0 40px rgba(0,120,255,0.5),0 0 80px rgba(0,120,255,0.2)}50%{box-shadow:0 0 60px rgba(0,180,255,0.8),0 0 120px rgba(0,212,170,0.3)}}
 @keyframes ring1{0%{transform:scale(1);opacity:0.7}100%{transform:scale(1.7);opacity:0}}
@@ -206,11 +226,33 @@ const ANIMATIONS = `
 @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
 `;
 
-function SettingsPanel({ realtimeMode, rtVoice, personaId, elevenVoice, voiceQuality, theme, personas, onSave, onClose, t }: {
+function SettingsPanel({ liveMode, liveVoice, liveStyle, realtimeMode, rtVoice, personaId, elevenVoice, voiceQuality, theme, personas, onSave, onClose, t }: {
+  liveMode: boolean;
+  liveVoice: string; liveStyle: string;
   realtimeMode: boolean; rtVoice: string; personaId: string; elevenVoice: string; voiceQuality: string; theme: Theme; personas: PersonaOption[];
-  onSave: (rt: boolean, rtV: string, persona: string, elv: string, q: string) => void; onClose: () => void; t: Record<string, string>;
+  onSave: (rt: boolean, rtV: string, persona: string, elv: string, q: string, live: boolean, liveV: string, style: string) => Promise<void>; onClose: () => void; t: Record<string, string>;
 }) {
   const [rt, setRt] = useState(realtimeMode);
+  const [live, setLive] = useState(liveMode);
+  const [liveV, setLiveV] = useState(liveVoice);
+  const [style, setStyle] = useState(liveStyle);
+  const [voices, setVoices] = useState(LIVE_VOICES);
+  const [catalogError, setCatalogError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 12000);
+    void authedFetch(LIVE_ENDPOINT, { method: "POST", credentials: "same-origin", body: JSON.stringify({ action: "voices" }), signal: controller.signal }).then(async response => {
+      if (!response.ok) throw new Error("catalog_unavailable");
+      const data = await response.json();
+      if (!Array.isArray(data.voices) || !data.voices.every((v: any) => typeof v.id === "string" && typeof v.name === "string" && typeof v.group === "string")) throw new Error("catalog_invalid");
+      if (!cancelled) { setVoices(data.voices); setCatalogError(""); }
+    }).catch(() => { if (!cancelled) setCatalogError("Built-in voices shown. Custom voices could not be checked; reopen Settings to retry."); }).finally(() => clearTimeout(timer));
+    return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
+  }, [live]);
   const [rtV, setRtV] = useState(rtVoice);
   const [persona, setPersona] = useState(personaId);
   const [elv, setElv] = useState(elevenVoice);
@@ -258,28 +300,46 @@ function SettingsPanel({ realtimeMode, rtVoice, personaId, elevenVoice, voiceQua
         <div style={{ marginBottom:20,padding:16,background:rt?t.accentSoft:t.surface2,border:`1px solid ${rt?t.accent:t.border}`,borderRadius:12 }}>
           <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between" }}>
             <div>
-              <p style={{ fontSize:14,fontWeight:600,color:t.fg,margin:0 }}>Realtime Mode</p>
-              <p style={{ fontSize:12,color:t.fgDim,margin:"4px 0 0" }}>~300ms latency via OpenAI WebRTC</p>
+              <p style={{ fontSize:14,fontWeight:600,color:t.fg,margin:0 }}>Voice mode</p>
+              <p style={{ fontSize:12,color:t.fgDim,margin:"4px 0 0" }}>Choose how you talk with your assistant.</p>
             </div>
-            <button onClick={() => setRt(v => !v)} disabled={q === "browser"} style={{ width:44,height:24,borderRadius:12,border:"none",cursor:q==="browser"?"not-allowed":"pointer",opacity:q==="browser"?0.4:1,background:rt?t.accent:t.border,position:"relative",transition:"background 0.2s" }}>
-              <div style={{ position:"absolute",top:3,left:rt?23:3,width:18,height:18,borderRadius:"50%",background:"#fff",transition:"left 0.2s" }} />
-            </button>
+            <select aria-label="Voice mode" value={!rt ? "classic" : live ? "live" : "realtime"} onChange={e=>{setRt(e.target.value!=="classic");setLive(e.target.value==="live");if(e.target.value!=="classic"&&q==="browser")setQ("hf");}} style={{...sel,width:160,minHeight:44}}>
+              <option value="realtime">Realtime</option><option value="live">GPT-Live</option><option value="classic">Classic</option>
+            </select>
           </div>
           {q === "browser" && <p style={{ fontSize:11,color:t.warn,margin:"8px 0 0" }}>Disabled in Browser quality mode.</p>}
+          {live&&rt&&<p style={{fontSize:12,color:t.fgMuted,lineHeight:1.5}}>Natural conversation while Zo works. Start when ready; End stops the session. Connected time costs $0.05/minute plus backend usage. Sessions end after 30 minutes.</p>}
         </div>
 
         {rt && (
           <div style={{ marginBottom:20 }}>
-            <label style={lbl}>AI Persona ({personas.length}) — voice mapped per persona</label>
+            <label style={lbl}>AI Persona ({personas.length}){!live && " — voice mapped per persona"}</label>
             <select value={persona} onChange={e => setPersona(e.target.value)} style={sel}>
               {Object.keys(grouped).sort().map(g => (
                 <optgroup key={g} label={g}>
-                  {grouped[g].map(p => <option key={p.id} value={p.id}>{p.name}{p.voice ? ` — ${p.voice}` : ''}</option>)}
+                  {grouped[g].map(p => <option key={p.id} value={p.id}>{p.name}{!live && p.voice ? ` — ${p.voice}` : ''}</option>)}
                 </optgroup>
               ))}
             </select>
           </div>
         )}
+
+        {rt && live && <div style={{ marginBottom: 24 }}>
+          <label htmlFor="live-voice" style={lbl}>GPT-Live voice</label>
+          <select id="live-voice" value={liveV} onChange={e => setLiveV(e.target.value)} style={{ ...sel, minHeight: 44 }} aria-describedby="live-voice-help">
+            {!voices.some(v => v.id === liveV) && <option value={liveV} disabled>Saved voice unavailable. Choose another.</option>}
+            {Array.from(new Set(voices.map(v => v.group))).map(group => <optgroup key={group} label={group}>
+              {voices.filter(v => v.group === group).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </optgroup>)}
+          </select>
+          <p id="live-voice-help" style={{ fontSize: 12, color: t.fgMuted, lineHeight: 1.5 }}>Voice and speaking style apply to your next conversation. Your current call keeps its voice.</p>
+          {catalogError && <p role="status" style={{ fontSize: 12, color: t.warn }}>{catalogError}</p>}
+          <label htmlFor="live-style" style={{ ...lbl, marginTop: 20 }}>Speaking style</label>
+          <select id="live-style" value={style} onChange={e => setStyle(e.target.value)} style={{ ...sel, minHeight: 44 }}>
+            <option value="natural">Natural</option><option value="calm">Calm and measured</option><option value="warm">Warm and friendly</option><option value="brisk">Brisk and clear</option>
+          </select>
+          <p style={{ fontSize: 12, color: t.fgMuted, lineHeight: 1.5 }}>Guides delivery while keeping the selected voice and persona.</p>
+        </div>}
 
         {!rt && (
           <>
@@ -305,8 +365,9 @@ function SettingsPanel({ realtimeMode, rtVoice, personaId, elevenVoice, voiceQua
         )}
 
         <div style={{ height:1,background:t.surface2,margin:"0 0 20px" }} />
-        <button onClick={() => { onSave(rt,rtV,persona,elv,q); setTimeout(onClose,300); }} style={{ width:"100%",padding:13,background:t.accent,color:"#fff",fontSize:15,fontWeight:600,border:"none",borderRadius:10,cursor:"pointer",fontFamily:"inherit" }}>
-          Save Settings
+        {saveError && <p role="alert" style={{ color: t.warn }}>{saveError}</p>}
+        <button disabled={saving || (live && rt && !voices.some(v => v.id === liveV))} onClick={async () => { setSaving(true); setSaveError(""); try { await onSave(rt,rtV,persona,elv,q,live,liveV,style); onClose(); } catch { setSaveError("Settings could not be saved. Please try again."); } finally { setSaving(false); } }} style={{ width:"100%",padding:13,background:t.accent,color:"#fff",fontSize:15,fontWeight:600,border:"none",borderRadius:10,cursor:"pointer",fontFamily:"inherit" }}>
+          {saving ? "Saving…" : "Save Settings"}
         </button>
         <div style={{ marginTop:20,padding:16,background:t.surface2,borderRadius:12,border:`1px solid ${t.border}` }}>
           <p style={{ fontSize:12,color:t.fgFaint,lineHeight:1.7,margin:0 }}>
@@ -367,6 +428,16 @@ function ArchiveDrawer({ entries, currentId, theme, t, onLoad, onDelete, onExpor
 const ARCHIVE_LS = "alaric_archive_v1";
 
 export default function AlaricVoicePWA() {
+  const [liveMode,setLiveMode] = useState(()=>localStorage.getItem("alaric_live_mode")==="true");
+  const [liveVoice, setLiveVoice] = useState(() => localStorage.getItem("alaric_live_voice") || "marin");
+  const [liveStyle, setLiveStyle] = useState(() => {
+    const saved = localStorage.getItem("alaric_live_style") || "natural";
+    return ["natural", "calm", "warm", "brisk"].includes(saved) ? saved : "natural";
+  });
+  const [liveTasks,setLiveTasks] = useState<LiveTask[]>([]);
+  const [liveBusy,setLiveBusy] = useState(false);
+  const [liveUsage,setLiveUsage] = useState(0);
+  const liveRef = useRef({ id: "", previous: sessionStorage.getItem("alaric_live_session")||"", token: sessionStorage.getItem("alaric_live_session_token")||"", fragments: [] as LiveFragment[], seen: new Set<string>(), generation: 0, ready: false, busy: false, timer: 0, idle: 0, contextTimer: 0, pending: 0, version: 0, final: false });
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("alaric_theme") as Theme) || "dark");
   const [voiceQuality, setVoiceQuality] = useState<string>(() => localStorage.getItem("alaric_voice_quality") || "hf");
   const [realtimeMode,setRealtimeMode] = useState(() => {
@@ -574,7 +645,7 @@ export default function AlaricVoicePWA() {
   useEffect(() => { if(convRef.current) convRef.current.scrollTop=convRef.current.scrollHeight; },[messages,isTyping,rtUserText]);
   useEffect(() => { const tt=setTimeout(()=>showToast(realtimeMode?"Realtime listening is ready.":"Tap Alaric to listen.","info",setToast_),800); return()=>clearTimeout(tt); },[]); // eslint-disable-line
   useEffect(() => { if("serviceWorker" in navigator) navigator.serviceWorker.register("{{PAGE_PATH}}/sw").catch(()=>{}); },[]);
-  useEffect(() => ()=>{ disconnectRealtime(); stopWake(); clearAudioMotion(); },[]); // eslint-disable-line
+  useEffect(() => ()=>{ if(liveRef.current.id)void endLive();else disconnectRealtime(); stopWake(); clearAudioMotion(); },[]); // eslint-disable-line
 
   async function fallbackTTS(text:string) {
     if(!("speechSynthesis" in window)) return;
@@ -746,7 +817,186 @@ export default function AlaricVoicePWA() {
 
   useEffect(()=>{sendZoRef.current=sendZoMessage;},[sendZoMessage]);
 
+  async function liveRequest(body: Record<string, unknown>) {
+    const id=liveRef.current.id;
+    const response = await authedFetch(LIVE_ENDPOINT, { method:"POST", credentials:"same-origin", body:JSON.stringify({session_id:id,session_token:liveRef.current.token||undefined,...body}) });
+    const data = await response.json();
+    if(!response.ok) throw Object.assign(new Error(data.message||data.error||`Live request ${response.status}`),{code:data.error,status:response.status});
+    if(body.action!=="create"&&id===liveRef.current.id&&typeof data.session_token==="string") {
+      liveRef.current.token=data.session_token;
+      sessionStorage.setItem("alaric_live_session_token",data.session_token);
+    }
+    return data;
+  }
+
+  function recordLiveTask(task: LiveTask) {
+    if(!task.task_id) return;
+    setLiveTasks(tasks=>[...tasks.filter(t=>t.task_id!==task.task_id),task]);
+  }
+
+  function speakLiveResult(task: LiveTask, delegation: string|null, generation: number, version: number) {
+    if(generation!==liveRef.current.generation||version!==liveRef.current.version||!liveRef.current.ready) return;
+    const content=task.status==="approval"?"The proposed action is ready for your review on screen. Nothing has been executed.":task.result;
+    if(content&&dcRef.current?.readyState==="open") {
+      dcRef.current.send(JSON.stringify({type:"session.commentary.append",event_id:crypto.randomUUID(),delegation_id:delegation,content:content.slice(0,1200)}));
+    }
+  }
+
+  async function requestLiveTask(delegation: string, offset: number, spoken=true) {
+    const state=liveRef.current;
+    if(state.seen.has(delegation)||!state.ready) return;
+    state.seen.add(delegation);
+    const generation=state.generation, version=state.version;
+    state.pending++; setLiveBusy(true);
+    try {
+      const task=await liveRequest({action:"delegate",delegation_id:delegation,offset_ms:offset,fragments:state.fragments});
+      if(generation!==liveRef.current.generation) return;
+      recordLiveTask(task);
+      speakLiveResult(task,spoken?delegation:null,generation,version);
+    } catch(error:any) {
+      if(generation===liveRef.current.generation) showToast(error.message,"error",setToast_);
+    } finally {state.pending=Math.max(0,state.pending-1);if(generation===liveRef.current.generation)setLiveBusy(state.pending>0);}
+  }
+
+  async function reviewLiveTask(task: LiveTask, approve: boolean) {
+    const generation=liveRef.current.generation,version=liveRef.current.version;
+    setLiveBusy(true);
+    try {
+      await liveRequest({action:"context",fragments:liveRef.current.fragments});
+      const result=await liveRequest({action:"approve",task_id:task.task_id,approval_id:task.approval?.id,approve});
+      recordLiveTask({...task,...result});
+      speakLiveResult(result,null,generation,version);
+    } catch(error:any){showToast(error.message,"error",setToast_);await refreshLiveTasks();}
+    finally{setLiveBusy(false);}
+  }
+
+  async function refreshLiveTasks() {
+    if(!liveRef.current.id) return;
+    try {const data=await liveRequest({action:"status"});setLiveTasks(data.tasks||[]);} catch(error:any){showToast(error.message,"error",setToast_);}
+  }
+
+  async function cancelLiveTasks() {
+    try {
+      const data=await liveRequest({action:"status"});
+      for(const task of data.tasks||[]) if(["running","approval"].includes(task.status)) recordLiveTask({...task,...await liveRequest({action:"cancel",task_id:task.task_id})});
+      showToast("Pending work cancelled. An action already executing may still finish.","info",setToast_);
+    }catch(error:any){showToast(error.message,"error",setToast_);}
+  }
+
+  function releaseLiveMedia() {
+    const state=liveRef.current;
+    state.ready=false;state.busy=false;
+    clearTimeout(state.timer);clearTimeout(state.idle);clearTimeout(state.contextTimer);
+    disconnectRealtime();
+    setLiveBusy(false);
+  }
+
+  async function endLive() {
+    const state=liveRef.current;
+    state.generation++;state.ready=false;
+    localStream.current?.getTracks().forEach(track=>track.stop());
+    const dc=dcRef.current;
+    const closed=dc?.readyState==="open"?new Promise<void>(resolve=>{
+      const timer=window.setTimeout(()=>{dc.removeEventListener("message",onMessage);resolve();},3500);
+      const onMessage=(event:MessageEvent)=>{try{const data=JSON.parse(event.data);if(data.type==="session.closed"){state.final=true;setLiveUsage(data.usage?.seconds||0);clearTimeout(timer);dc.removeEventListener("message",onMessage);resolve();}}catch{}};
+      dc.addEventListener("message",onMessage);
+      dc.send(JSON.stringify({type:"session.close",event_id:crypto.randomUUID()}));
+    }):Promise.resolve();
+    try {if(state.id)await liveRequest({action:"close"});}catch(error:any){showToast(`Session close unconfirmed: ${error.message}`,"warn",setToast_);}
+    await closed;
+    releaseLiveMedia();
+    await refreshLiveTasks();
+    if(!state.final)showToast("Disconnected. Final voice usage is unconfirmed.","warn",setToast_);
+  }
+
+  async function connectLive() {
+    const state=liveRef.current;
+    if(state.busy||state.ready) return;
+    state.busy=true;state.final=false;setRtConnecting(true);
+    const generation=++state.generation;
+    try {
+      if(state.id||state.previous) {
+        state.id=state.id||state.previous;
+        try {
+          await liveRequest({action:"close"});
+          await refreshLiveTasks();
+        } catch(error:any) {
+          if(error.status!==404||error.code!=="session_not_found")throw error;
+          state.id="";state.previous="";state.token="";state.fragments=[];state.seen.clear();
+          sessionStorage.removeItem("alaric_live_session");
+          sessionStorage.removeItem("alaric_live_session_token");
+          setLiveTasks([]);
+          showToast("Previous conversation unavailable. Starting fresh; prior actions will not be repeated.","info",setToast_);
+        }
+      }
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      if(generation!==state.generation){stream.getTracks().forEach(track=>track.stop());return;}
+      localStream.current=stream;
+      stream.getAudioTracks().forEach(track=>track.enabled=!rtMuted);
+      const pc=new RTCPeerConnection();pcRef.current=pc;
+      const audio=new Audio();audio.autoplay=true;audioRef.current=audio;
+      pc.ontrack=event=>{audio.srcObject=new MediaStream([event.track]);attachAudioMotion(audio);void audio.play().catch(()=>showToast("Tap the portrait to enable audio.","info",setToast_));};
+      stream.getAudioTracks().forEach(track=>pc.addTrack(track,stream));
+      const dc=pc.createDataChannel("oai-events");dcRef.current=dc;
+      dc.onmessage=event=>{
+        if(generation!==state.generation)return;
+        let data:any;try{data=JSON.parse(event.data);}catch{return;}
+        if(data.type==="session.started") {
+          state.ready=true;state.busy=false;setRtConnected(true);setRtConnecting(false);
+          clearTimeout(state.timer);
+          state.timer=window.setTimeout(()=>void endLive(),30*60000);
+          state.idle=window.setTimeout(()=>void endLive(),5*60000);
+          showToast("GPT-Live connected.","success",setToast_);
+        } else if(data.type==="session.input_transcript.delta"||data.type==="session.output_transcript.delta") {
+          const role=data.type==="session.input_transcript.delta"?"user":"assistant";
+          if(typeof data.delta!=="string"||!Number.isFinite(data.start_ms)||!Number.isFinite(data.end_ms))return;
+          state.fragments.push({role,delta:data.delta,start_ms:data.start_ms,end_ms:data.end_ms});
+          if(state.fragments.length>1500){showToast("Transcript limit reached. Start a new session.","info",setToast_);void endLive();return;}
+          if(role==="user") {
+            state.version++;
+            clearTimeout(state.idle);state.idle=window.setTimeout(()=>void endLive(),5*60000);
+            clearTimeout(state.contextTimer);
+            state.contextTimer=window.setTimeout(()=>void liveRequest({action:"context",fragments:state.fragments}).catch(()=>{}),350);
+          }
+          setMessages(messages=>{
+            const last=messages[messages.length-1];
+            if(last?.role===role)return [...messages.slice(0,-1),{...last,text:last.text+data.delta}];
+            return [...messages,{role,text:data.delta,time:ts()}];
+          });
+        } else if(data.type==="session.delegation.created"&&data.delegation?.target==="client") {
+          void requestLiveTask(data.delegation.id,data.offset_ms);
+        } else if(data.type==="session.usage.updated") {
+          setLiveUsage(data.usage?.seconds||0);
+        } else if(data.type==="session.closed") {
+          state.final=true;setLiveUsage(data.usage?.seconds||0);void endLive();
+        } else if(data.type==="error") {
+          showToast(`GPT-Live: ${data.error?.message||"request failed"}`,"error",setToast_);
+        }
+      };
+      pc.onconnectionstatechange=()=>{if(generation===state.generation&&["failed","disconnected"].includes(pc.connectionState)){showToast("Connection lost. End this session before reconnecting.","warn",setToast_);void endLive();}};
+      const offer=await pc.createOffer();await pc.setLocalDescription(offer);
+      if(pc.iceGatheringState!=="complete")await new Promise<void>((resolve,reject)=>{
+        const timeout=window.setTimeout(()=>{pc.removeEventListener("icegatheringstatechange",check);reject(new Error("Connection setup timed out"));},10000);
+        const check=()=>{if(pc.iceGatheringState==="complete"){clearTimeout(timeout);pc.removeEventListener("icegatheringstatechange",check);resolve();}};
+        pc.addEventListener("icegatheringstatechange",check);
+      });
+      if(generation!==state.generation)return;
+      const result=await liveRequest({action:"create",request_id:crypto.randomUUID(),persona_id:personaId,voice:liveVoice,speaking_style:liveStyle,sdp:pc.localDescription?.sdp,resume_session_id:state.id||undefined});
+      state.previous=state.id;state.id=result.session_id;
+      state.token=result.session_token||"";
+      sessionStorage.setItem("alaric_live_session",state.id);
+      sessionStorage.setItem("alaric_live_session_token",state.token);
+      state.fragments=result.fragments||[];state.seen.clear();
+      if(generation!==state.generation){await liveRequest({action:"close"});return;}
+      await pc.setRemoteDescription({type:"answer",sdp:result.transport.sdp});
+      state.timer=window.setTimeout(()=>{showToast("GPT-Live did not start. Please retry.","error",setToast_);void endLive();},20000);
+    } catch(error:any) {
+      if(generation===state.generation){showToast(`GPT-Live: ${error.message}`,"error",setToast_);if(state.id)await liveRequest({action:"close"}).catch(()=>{});releaseLiveMedia();}
+    } finally {if(generation===state.generation)state.busy=false;}
+  }
+
   const connectRealtime = useCallback(async()=>{
+    if(liveMode) return;
     if(rtConnected||rtConnecting) return;
     setRtConnecting(true);
     userDisconnected.current=false;
@@ -822,16 +1072,16 @@ export default function AlaricVoicePWA() {
     }
     setRtConnecting(false);
     showToast(`Connect failed after ${MAX_RETRIES} attempts: ${lastErr}`, "error", setToast_);
-  },[attachAudioMotion,personaId,rtConnected,rtConnecting,rtMuted,handleRtEvent]);
+  },[attachAudioMotion,personaId,rtConnected,rtConnecting,rtMuted,handleRtEvent,liveMode]);
 
   useEffect(()=>{connectRtRef.current=connectRealtime;},[connectRealtime]);
 
   useEffect(()=>{
-    if(!realtimeMode||voiceQuality==="browser"||autoConnectStarted.current) return;
+    if(liveMode||!realtimeMode||voiceQuality==="browser"||autoConnectStarted.current) return;
     autoConnectStarted.current=true;
     const timer=window.setTimeout(()=>connectRealtime(),0);
     return()=>window.clearTimeout(timer);
-  },[connectRealtime,realtimeMode,voiceQuality,personaId]);
+  },[connectRealtime,realtimeMode,voiceQuality,personaId,liveMode]);
 
   // One bounded auto-reconnect after a dropped realtime session. Single-flight
   // via rtReconnectTimer; re-checks liveness after the delay so a self-healed
@@ -873,14 +1123,22 @@ export default function AlaricVoicePWA() {
   },[rtMuted]);
 
   const sendRealtimeText=useCallback((text:string)=>{
+    if(liveMode){
+      if(!text.trim()||!liveRef.current.ready)return;
+      const offset=liveRef.current.fragments.at(-1)?.end_ms||0;
+      liveRef.current.fragments.push({role:"user",delta:text,start_ms:offset,end_ms:offset});liveRef.current.version++;
+      setMessages(m=>[...m,{role:"user",text,time:ts()}]);
+      void requestLiveTask(`typed_${crypto.randomUUID()}`,offset,false);return;
+    }
     setMessages(m=>[...m,{role:"user",text,time:ts()}]); sendZoMessage(text);
-  },[sendZoMessage]);
+  },[sendZoMessage,liveMode]);
 
   const stopRecording=useCallback(()=>{
     setIsRecording(false); if(speechRec.current){try{speechRec.current.stop();}catch{}}
   },[]);
 
   const sendMessage=useCallback(async(text?:string)=>{
+    if(liveMode&&realtimeMode){showToast("Start GPT-Live before sending a message.","info",setToast_);return;}
     const msg=(text||inputText).trim(); if(!msg||isTyping) return;
     setInputText(""); if(inputRef.current) inputRef.current.style.height="auto";
     setMessages(m=>[...m,{role:"user",text:msg,time:ts()}]); setIsTyping(true);
@@ -902,7 +1160,7 @@ export default function AlaricVoicePWA() {
       setIsTyping(false); showToast(`Connection error: ${err?.message}`,"error",setToast_);
       setMessages(m=>[...m,{role:"system",text:`Request failed: ${err?.message}`,time:ts()}]);
     }
-  },[inputText,isTyping,personaId,convId,speakText]);
+  },[inputText,isTyping,personaId,convId,speakText,liveMode,realtimeMode]);
 
   const startRecording=useCallback(()=>{
     const SR=(window as any).SpeechRecognition||(window as any).webkitSpeechRecognition;
@@ -971,14 +1229,24 @@ export default function AlaricVoicePWA() {
     showToast("Conversation archived.","success",setToast_);
   }, [messages, convId, convTags, archive]);
 
-  const clearSession=useCallback((skipArchive = false)=>{
+  const clearSession=useCallback(async(skipArchive = false)=>{
+    if(liveRef.current.id){await endLive();liveRef.current.id="";liveRef.current.previous="";liveRef.current.token="";liveRef.current.fragments=[];setLiveTasks([]);sessionStorage.removeItem("alaric_live_session");sessionStorage.removeItem("alaric_live_session_token");}
     if (!skipArchive && messages.length > 1) archiveCurrent();
     setMessages([]);setConvId("");setConvTags([]);saveConvId("");setRtUserText("");
     sessionStart.current = Date.now();
     if(!realtimeMode)showToast("New session started.","success",setToast_);
   },[realtimeMode,rtConnected,messages.length,archiveCurrent]);
 
-  const handleSave=(rt:boolean,rtV:string,persona:string,elv:string,q:string)=>{
+  const handleSave=async(rt:boolean,rtV:string,persona:string,elv:string,q:string,live:boolean,liveV:string,style:string)=>{
+    const keepLive = liveMode && live && rt && persona === personaId && q !== "browser";
+    const livePreferencesChanged = liveV !== liveVoice || style !== liveStyle;
+    if((liveRef.current.ready||liveRef.current.busy)&&!keepLive)await endLive();
+    setLiveVoice(liveV);setLiveStyle(style);
+    localStorage.setItem("alaric_live_voice",liveV);localStorage.setItem("alaric_live_style",style);
+    if(live)stopWake();
+    if(persona!==personaId){liveRef.current.id="";liveRef.current.previous="";liveRef.current.token="";liveRef.current.fragments=[];setLiveTasks([]);sessionStorage.removeItem("alaric_live_session");sessionStorage.removeItem("alaric_live_session_token");}
+    if(live!==liveMode)disconnectRealtime();
+    setLiveMode(live);localStorage.setItem("alaric_live_mode",String(live));
     if(!rt&&rtConnected)disconnectRealtime();
     if(rt&&rtConnected&&persona!==personaId){disconnectRealtime();showToast("Persona changed — reconnect to apply.","info",setToast_);}
     if(rt) autoConnectStarted.current=false;
@@ -986,7 +1254,7 @@ export default function AlaricVoicePWA() {
     localStorage.setItem("alaric_rt_mode",String(rt));localStorage.setItem("alaric_rt_voice",rtV);
     localStorage.setItem("alaric_persona_id",persona);localStorage.setItem("alaric_voice_name",elv);
     localStorage.setItem("alaric_voice_quality", q);
-    showToast("Settings saved.","success",setToast_);
+    showToast(live&&livePreferencesChanged?"Settings saved. Voice and style apply to your next conversation.":"Settings saved.","success",setToast_);
   };
 
   const toggleTheme = () => {
@@ -1053,7 +1321,9 @@ export default function AlaricVoicePWA() {
     persistArchive(archive.filter(e => e.id !== id));
   }
 
-  const statusText=realtimeMode
+  const statusText=liveMode&&realtimeMode
+    ?rtConnecting?"Connecting…":rtConnected?(rtMuted?"Microphone muted":liveBusy?"Connected · Zo is working":"Connected · Ready to listen"):"Ready to start GPT-Live"
+    :realtimeMode
     ?rtConnecting?"Connecting…":rtConnected?(rtMuted?"Muted":isRecording?"Listening…":isSpeaking?"Speaking…":"Listening"):"Connecting…"
     :isSpeaking?"Speaking…":isRecording?"Listening…":isTyping?"Thinking…":"Muted";
   const statusColor=rtConnecting?t.warn
@@ -1075,7 +1345,7 @@ export default function AlaricVoicePWA() {
         <div style={{ display:"flex",alignItems:"center",gap:8 }}>
           <button onClick={toggleTheme} title={theme==="dark"?"Light mode":"Dark mode"} style={btnBase}>{theme==="dark"?<SunIcon/>:<MoonIcon/>}</button>
           <button onClick={() => setShowArchive(true)} title="Archive" style={btnBase}><ArchiveIcon /></button>
-          <button onClick={toggleWake} title="Wake word" style={{ ...btnBase,border:`1px solid ${wakeActive?"rgba(34,197,94,0.4)":t.border}`,background:wakeActive?"rgba(34,197,94,0.08)":t.surface2,position:"relative" }}>
+          <button onClick={toggleWake} disabled={liveMode&&realtimeMode} title={liveMode&&realtimeMode?"Use Start conversation for GPT-Live":"Wake word"} style={{ ...btnBase,border:`1px solid ${wakeActive?"rgba(34,197,94,0.4)":t.border}`,background:wakeActive?"rgba(34,197,94,0.08)":t.surface2,position:"relative" }}>
             <EarIcon active={wakeActive} />
             {wakeActive&&<div style={{ position:"absolute",top:6,right:6,width:7,height:7,borderRadius:"50%",background:"#22c55e",animation:"wakeWordPulse 1.5s ease-in-out infinite" }} />}
           </button>
@@ -1105,6 +1375,8 @@ export default function AlaricVoicePWA() {
               aria-label={rtMuted ? "Unmute Alaric" : "Mute Alaric"}
               aria-pressed={!rtMuted}
               onClick={()=>{
+                if(liveMode&&realtimeMode&&!rtConnected&&!rtConnecting){void connectLive();return;}
+                if(liveMode)void audioRef.current?.play().catch(()=>{});
                 if(realtimeMode&&rtConnected) toggleRtMute();
                 else if(!realtimeMode){ if(isRecording) stopRecording(); else startRecording(); }
               }}
@@ -1124,10 +1396,15 @@ export default function AlaricVoicePWA() {
           const label = active ? `${active.name}${active.voice ? ` · ${active.voice}` : ''}` : rtVoice;
           return (
             <div style={{ marginTop:6,display:"flex",alignItems:"center",gap:4,fontSize:11,color:rtConnected?t.success:t.fgFaint,background:rtConnected?"rgba(34,197,94,0.08)":t.surface,border:`1px solid ${rtConnected?"rgba(34,197,94,0.2)":t.surface2}`,borderRadius:20,padding:"3px 10px" }}>
-              <BoltIcon size={10} /><span>Realtime · {label} · {voiceQuality.toUpperCase()}</span>
+              <BoltIcon size={10} /><span>{liveMode?"GPT-Live":"Realtime"} · {label}</span>
             </div>
           );
         })()}
+        {liveMode&&realtimeMode&&<div style={{display:"flex",gap:8,marginTop:12,alignItems:"center"}}>
+          <button disabled={rtConnecting} onClick={()=>rtConnected?void endLive():void connectLive()} style={{...btnBase,width:"auto",height:44,padding:"0 16px",color:t.fg}}>{rtConnected?"End conversation":rtConnecting?"Connecting…":"Start conversation"}</button>
+          {rtConnecting&&<button onClick={()=>void endLive()} style={{...btnBase,width:"auto",height:44,padding:"0 12px"}}>Cancel</button>}
+          {liveUsage>0&&<span style={{fontSize:12,color:t.fgMuted}}>{Math.ceil(liveUsage)}s connected</span>}
+        </div>}
       </div>
 
       {rtUserText&&<div style={{ padding:"0 24px 8px",position:"relative",zIndex:10,flexShrink:0 }}><p style={{ fontSize:13,color:t.fgDim,textAlign:"right",margin:0,fontStyle:"italic" }}>"{rtUserText}"</p></div>}
@@ -1150,10 +1427,23 @@ export default function AlaricVoicePWA() {
       )}
 
       <main ref={convRef} style={{ flex:1,overflowY:"auto",overflowX:"hidden",padding:"8px 24px 16px",position:"relative",zIndex:10,scrollBehavior:"smooth" }}>
+        {liveMode&&<section aria-label="Zo tasks" style={{marginBottom:16}}>
+          {liveBusy&&<div role="status" style={{display:"flex",gap:8,alignItems:"center"}}>Zo is working <button onClick={()=>void cancelLiveTasks()} style={{...btnBase,width:"auto",height:44,padding:"0 12px"}}>Cancel task</button></div>}
+          {liveTasks.map(task=><div key={task.task_id} style={{padding:"12px 0",borderBottom:`1px solid ${t.border}`}}>
+            <p style={{fontSize:13,margin:"0 0 8px"}}>{task.approval?.name||"Request"} · {task.status}</p>
+            {task.status==="approval"&&task.approval&&<>
+              <p style={{fontSize:13}}>Review this action before it runs. A new spoken request expires this approval.</p>
+              <pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontSize:12,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(task.approval.arguments,null,2)}</pre>
+              <div style={{display:"flex",gap:8}}><button disabled={liveBusy} onClick={()=>void reviewLiveTask(task,true)} style={{...btnBase,width:"auto",height:44,padding:"0 16px",background:t.accent,color:t.fg}}>Approve action</button><button disabled={liveBusy} onClick={()=>void reviewLiveTask(task,false)} style={{...btnBase,width:"auto",height:44,padding:"0 16px"}}>Reject</button></div>
+            </>}
+            {task.result&&<p style={{fontSize:13,overflowWrap:"anywhere"}}>{task.result}</p>}
+            {["running","executing","uncertain"].includes(task.status)&&<button onClick={()=>void refreshLiveTasks()} style={{...btnBase,width:"auto",height:44,padding:"0 12px"}}>Check status</button>}
+          </div>)}
+        </section>}
         {messages.length===0&&(
           <div style={{ display:"flex",flexDirection:"column",alignItems:"center",textAlign:"center",padding:"16px 20px" }}>
             <p style={{ fontSize:14,color:t.fgDim,maxWidth:280,lineHeight:1.6 }}>
-              {realtimeMode&&voiceQuality!=="browser"?"AI assistant + Zo tools. Realtime listening is active.":"Tap Alaric or type to speak."}
+              {liveMode&&realtimeMode?"Start a GPT-Live conversation when you are ready.":realtimeMode&&voiceQuality!=="browser"?"AI assistant + Zo tools. Realtime listening is active.":"Tap Alaric or type to speak."}
             </p>
           </div>
         )}
@@ -1177,7 +1467,7 @@ export default function AlaricVoicePWA() {
           <div style={{ display:"flex",gap:10,marginBottom:20 }}>
             <div style={{ width:34,height:34,borderRadius:10,background:`linear-gradient(135deg,${t.grad1},${t.grad2})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:13,fontWeight:700,color:"#fff" }}>A</div>
             <div style={{ background:t.surface2,border:`1px solid ${t.border}`,borderBottomLeftRadius:4,borderRadius:20,padding:"14px 18px",display:"flex",alignItems:"center",gap:6 }}>
-              {[0,1,2].map(d=><div key={d} style={{ width:6,height:6,borderRadius:"50%",background:t.fgDim,animation:`typingBounce 1.2s ease-in-out infinite ${d*0.2}s` }} />)}
+              {[0,1,2].map(d=><div key={d} style={{ width:6,height:6,borderRadius:"50%",background:t.fgDim,animation:`typingPulse 1.2s ease-in-out infinite ${d*0.2}s` }} />)}
             </div>
           </div>
         )}
@@ -1204,7 +1494,7 @@ export default function AlaricVoicePWA() {
         </div>
       )}
 
-      {showSettings&&<SettingsPanel realtimeMode={realtimeMode} rtVoice={rtVoice} personaId={personaId} elevenVoice={elevenVoice} voiceQuality={voiceQuality} theme={theme} personas={personas} onSave={handleSave} onClose={()=>setShowSettings(false)} t={t} />}
+      {showSettings&&<SettingsPanel liveMode={liveMode} liveVoice={liveVoice} liveStyle={liveStyle} realtimeMode={realtimeMode} rtVoice={rtVoice} personaId={personaId} elevenVoice={elevenVoice} voiceQuality={voiceQuality} theme={theme} personas={personas} onSave={handleSave} onClose={()=>setShowSettings(false)} t={t} />}
       {showArchive&&<ArchiveDrawer entries={archive} currentId={convId} theme={theme} t={t} onLoad={loadArchiveEntry} onDelete={deleteArchiveEntry} onExport={exportEntry} onClose={()=>setShowArchive(false)} />}
     </div>
   );

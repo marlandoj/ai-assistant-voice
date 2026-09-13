@@ -204,6 +204,9 @@ if (deployAll) {
   }
 
   // /api/<slug>-personas — dynamic catalog from list_personas MCP (HMAC-authed, ETag-cached)
+  const liveCode = substitutePlaceholders(readFileSync(join(ASSETS, "live-route.ts"), "utf8"));
+  await deployRoute(`${assistSlug}-live`, `/api/${assistSlug}-live`, liveCode);
+
   const personasRouteCode = substitutePlaceholders(readFileSync(join(ASSETS, "alaric-personas-route.ts"), "utf8"));
   console.log("    ℹ️   Requires secrets: ZO_ASK_TOKEN (HMAC verify) + ZO_API_KEY (list_personas upstream)");
   try {
