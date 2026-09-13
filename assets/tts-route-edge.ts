@@ -17,7 +17,7 @@ function buildCorsHeaders(origin: string | undefined): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": allow,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Zo-User-Token",
+    "Access-Control-Allow-Headers": "Content-Type, X-Zo-User-Token, X-{{ASSISTANT_NAME}}-Auth",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
   };
@@ -68,7 +68,7 @@ export default async (c: Context): Promise<Response> => {
   try {
     await runEdgeTts(text, voice, outFile);
     const audio = await readFile(outFile);
-    return new Response(audio, {
+    return new Response(new Uint8Array(audio), {
       status: 200,
       headers: { ...cors, "Content-Type": "audio/mpeg", "Cache-Control": "no-store" },
     });

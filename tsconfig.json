@@ -28,6 +28,8 @@
     }
   },
   "include": [
+    "assets/ai-ask-route.ts",
+    "tests/typed-message.test.ts",
     "assets/pwa-page.tsx",
     "assets/live-route.ts",
     "assets/alaric-personas-route.ts",
